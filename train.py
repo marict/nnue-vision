@@ -20,28 +20,28 @@ from model import NNUE, LossParams
 def adapt_batch_for_nnue(batch, num_ls_buckets=8):
     """
     Adapt batch from dataset format (images, labels) to NNUE format.
-    
+
     Args:
         batch: Tuple of (images, labels) from dataset
         num_ls_buckets: Number of layer stack buckets
-        
+
     Returns:
         Tuple of (images, targets, scores, layer_stack_indices) for NNUE
     """
     images, labels = batch
     batch_size = images.shape[0]
     device = images.device  # Get device from images
-    
+
     # Convert labels to targets (float format for loss computation)
     targets = labels.float().to(device)
-    
+
     # Generate synthetic scores (in real NNUE training, these would be search evaluation scores)
     # For visual wake words, we'll use dummy scores
     scores = torch.zeros_like(targets, device=device)
-    
+
     # Generate random layer stack indices (bucket selection) on the same device
     layer_stack_indices = torch.randint(0, num_ls_buckets, (batch_size,), device=device)
-    
+
     return images, targets, scores, layer_stack_indices
 
 
@@ -210,9 +210,7 @@ def setup_wandb_logger(config) -> WandbLogger:
     """Set up wandb logger with comprehensive configuration."""
 
     # Generate run name with timestamp and key parameters
-    run_name = (
-        f"nnue-lr{config.learning_rate}-bs{config.batch_size}-img{getattr(config, 'input_size', (96, 96))[0]}"
-    )
+    run_name = f"nnue-lr{config.learning_rate}-bs{config.batch_size}-img{getattr(config, 'input_size', (96, 96))[0]}"
     if hasattr(config, "note") and config.note:
         run_name += f"-{config.note}"
 
@@ -259,19 +257,19 @@ def setup_wandb_logger(config) -> WandbLogger:
 
 class NNUEWrapper(pl.LightningModule):
     """
-    Wrapper for NNUE model that adapts data format from standard (images, labels) 
+    Wrapper for NNUE model that adapts data format from standard (images, labels)
     to NNUE format (images, targets, scores, layer_stack_indices).
     """
-    
+
     def __init__(self, nnue_model):
         super().__init__()
         self.nnue = nnue_model
         self.num_ls_buckets = nnue_model.num_ls_buckets
-    
+
     def _compute_loss(self, batch, batch_idx):
         """Compute loss without logging (internal version of NNUE step_)"""
         # This replicates the NNUE step_ method but without logging
-        
+
         # We clip weights at the start of each step. This means that after
         # the last step the weights might be outside of the desired range.
         # They should be also clipped accordingly in the serializer.
@@ -312,7 +310,7 @@ class NNUEWrapper(pl.LightningModule):
         loss = loss.mean()
 
         return loss
-    
+
     def training_step(self, batch, batch_idx):
         adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
         # Compute loss without internal logging
@@ -320,7 +318,7 @@ class NNUEWrapper(pl.LightningModule):
         # Log using the wrapper's logging context
         self.log("train_loss", loss)
         return loss
-    
+
     def validation_step(self, batch, batch_idx):
         adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
         # Compute loss without internal logging
@@ -328,7 +326,7 @@ class NNUEWrapper(pl.LightningModule):
         # Log using the wrapper's logging context
         self.log("val_loss", loss)
         return loss
-    
+
     def test_step(self, batch, batch_idx):
         adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
         # Compute loss without internal logging
@@ -336,10 +334,10 @@ class NNUEWrapper(pl.LightningModule):
         # Log using the wrapper's logging context
         self.log("test_loss", loss)
         return loss
-    
+
     def configure_optimizers(self):
         return self.nnue.configure_optimizers()
-    
+
     def forward(self, images, layer_stack_indices):
         return self.nnue.forward(images, layer_stack_indices)
 
@@ -428,7 +426,7 @@ def main():
         num_ls_buckets=getattr(config, "num_ls_buckets", 8),
         visual_threshold=getattr(config, "visual_threshold", 0.0),
     )
-    
+
     # Wrap NNUE model to handle data format adaptation
     model = NNUEWrapper(nnue_model)
 

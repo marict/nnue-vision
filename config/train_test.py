@@ -38,4 +38,4 @@ project_name = "visual_wake_words_test"
 num_ls_buckets = 2  # Minimal number of layer stacks for testing
 visual_threshold = 0.0
 start_lambda = 1.0
-end_lambda = 1.0 
+end_lambda = 1.0

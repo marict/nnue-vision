@@ -1097,7 +1097,7 @@ class TestTrainScriptEndToEnd:
     def test_train_with_default_config(self, tmp_path):
         """
         End-to-end test that runs train.py with train_test.py config and verifies success.
-        
+
         This test:
         1. Runs the complete train.py script with config/train_test.py
         2. Uses a very small subset and few epochs for speed
@@ -1109,27 +1109,28 @@ class TestTrainScriptEndToEnd:
         from pathlib import Path
 
         print("=== E2E Train Script Test ===")
-        
+
         # Get the project root directory
         project_root = Path(__file__).parent.parent
         train_script = project_root / "train.py"
         config_file = project_root / "config" / "train_test.py"
-        
+
         # Verify files exist
         assert train_script.exists(), f"train.py not found at {train_script}"
         assert config_file.exists(), f"train_test.py not found at {config_file}"
-        
+
         print(f"Step 1: Running train.py with {config_file.name}...")
-        
+
         # Set up command to run train.py with test config
         cmd = [
             sys.executable,
             str(train_script),
-            "--config", str(config_file),
+            "--config",
+            str(config_file),
         ]
-        
+
         print(f"Command: {' '.join(cmd)}")
-        
+
         try:
             # Run the training script with timeout
             result = subprocess.run(
@@ -1138,12 +1139,12 @@ class TestTrainScriptEndToEnd:
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout should be plenty for 2 epochs on small subset
-                check=False   # Don't raise exception on non-zero exit, we'll check manually
+                check=False,  # Don't raise exception on non-zero exit, we'll check manually
             )
-            
+
             print(f"Step 2: Verifying training completed successfully...")
             print(f"Exit code: {result.returncode}")
-            
+
             # Print stdout for debugging (first 2000 chars to avoid spam)
             if result.stdout:
                 stdout_preview = result.stdout[:2000]
@@ -1151,7 +1152,7 @@ class TestTrainScriptEndToEnd:
                     stdout_preview += "... (truncated)"
                 print("STDOUT:")
                 print(stdout_preview)
-            
+
             # Print stderr if there are errors
             if result.stderr:
                 stderr_preview = result.stderr[:1000]
@@ -1159,34 +1160,38 @@ class TestTrainScriptEndToEnd:
                     stderr_preview += "... (truncated)"
                 print("STDERR:")
                 print(stderr_preview)
-            
+
             # Verify the script completed successfully
-            assert result.returncode == 0, f"train.py failed with exit code {result.returncode}. STDERR: {result.stderr}"
-            
+            assert (
+                result.returncode == 0
+            ), f"train.py failed with exit code {result.returncode}. STDERR: {result.stderr}"
+
             print("Step 3: Verifying expected behavior...")
-            
+
             # Verify that training-related output is present in stdout
             stdout_lower = result.stdout.lower()
-            
+
             # Check for key training indicators
             training_indicators = [
                 "loading configuration",
                 "configuration loaded",
                 "creating data loaders",
                 "starting training",
-                "training completed"
+                "training completed",
             ]
-            
+
             missing_indicators = []
             for indicator in training_indicators:
                 if indicator not in stdout_lower:
                     missing_indicators.append(indicator)
-            
+
             if missing_indicators:
-                print(f"Warning: Missing some expected training indicators: {missing_indicators}")
+                print(
+                    f"Warning: Missing some expected training indicators: {missing_indicators}"
+                )
                 # Don't fail the test for missing indicators, as the stdout format might vary
                 # The main success criteria is exit code 0
-            
+
             # Verify no critical errors in output
             error_keywords = ["error", "failed", "exception", "traceback"]
             critical_errors = []
@@ -1194,34 +1199,47 @@ class TestTrainScriptEndToEnd:
                 if keyword in stdout_lower or keyword in result.stderr.lower():
                     # Check if it's actually an error message or just mentioning the word
                     lines_with_keyword = [
-                        line for line in (result.stdout + result.stderr).split('\n') 
+                        line
+                        for line in (result.stdout + result.stderr).split("\n")
                         if keyword in line.lower()
                     ]
                     for line in lines_with_keyword:
                         # Filter out warnings and non-critical messages
-                        if any(non_critical in line.lower() for non_critical in [
-                            "warning", "wandb", "api key", "may not work properly"
-                        ]):
+                        if any(
+                            non_critical in line.lower()
+                            for non_critical in [
+                                "warning",
+                                "wandb",
+                                "api key",
+                                "may not work properly",
+                            ]
+                        ):
                             continue
                         critical_errors.append(line.strip())
-            
+
             # Allow some expected warnings (like wandb API key warnings)
             filtered_errors = [
-                error for error in critical_errors 
-                if not any(acceptable in error.lower() for acceptable in [
-                    "wandb_api_key not found",
-                    "wandb logging may not work properly",
-                    "warning:"
-                ])
+                error
+                for error in critical_errors
+                if not any(
+                    acceptable in error.lower()
+                    for acceptable in [
+                        "wandb_api_key not found",
+                        "wandb logging may not work properly",
+                        "warning:",
+                    ]
+                )
             ]
-            
-            assert not filtered_errors, f"Found critical errors in output: {filtered_errors}"
-            
+
+            assert (
+                not filtered_errors
+            ), f"Found critical errors in output: {filtered_errors}"
+
             print("✅ E2E train script test completed successfully!")
             print(f"   - Script execution: ✅")
-            print(f"   - Exit code 0: ✅") 
+            print(f"   - Exit code 0: ✅")
             print(f"   - No critical errors: ✅")
-            
+
         except subprocess.TimeoutExpired:
             pytest.fail("train.py execution timed out after 5 minutes")
         except subprocess.CalledProcessError as e:
@@ -1234,17 +1252,13 @@ class TestTrainScriptEndToEnd:
         import subprocess
         import sys
         from pathlib import Path
-        
+
         project_root = Path(__file__).parent.parent
         train_script = project_root / "train.py"
-        
+
         # Test with non-existent config file
-        cmd = [
-            sys.executable,
-            str(train_script),
-            "--config", "config/nonexistent.py"
-        ]
-        
+        cmd = [sys.executable, str(train_script), "--config", "config/nonexistent.py"]
+
         try:
             result = subprocess.run(
                 cmd,
@@ -1252,16 +1266,17 @@ class TestTrainScriptEndToEnd:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                check=False
+                check=False,
             )
-            
+
             # Should fail with non-zero exit code
             assert result.returncode != 0, "train.py should fail with invalid config"
-            
+
             # Should mention configuration error in output
             output = result.stdout + result.stderr
-            assert "error" in output.lower() or "not found" in output.lower(), \
-                f"Expected error message not found in output: {output}"
-                
+            assert (
+                "error" in output.lower() or "not found" in output.lower()
+            ), f"Expected error message not found in output: {output}"
+
         except subprocess.TimeoutExpired:
             pytest.fail("train.py with invalid config should fail quickly, not timeout")
