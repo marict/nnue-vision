@@ -200,11 +200,11 @@ class TestDatasetStats:
 class TestDatasetIntegration:
     """Integration tests for dataset functionality."""
 
-    def test_dataset_with_model_input(self, simple_model, device):
+    def test_dataset_with_model_input(self, simple_test_model, device):
         """Test that dataset output is compatible with model input."""
         dataset = SyntheticVisualWakeWordsDataset(num_samples=4)
-        simple_model.to(device)
-        simple_model.eval()
+        simple_test_model.to(device)
+        simple_test_model.eval()
 
         # Test individual samples
         for i in range(len(dataset)):
@@ -213,28 +213,29 @@ class TestDatasetIntegration:
 
             # Forward pass should work without error
             with torch.no_grad():
-                logits = simple_model(image)
+                logits = simple_test_model(image)
 
             assert_tensor_shape(logits, (1, 2))
             assert logits.dtype == torch.float32
 
-    def test_dataloader_with_model_training(self, simple_model, device):
+    def test_dataloader_with_model_training(self, simple_test_model, device):
         """Test that data loader output works with model training."""
         train_loader, _, _ = create_data_loaders(
             batch_size=4, num_workers=0, target_size=(96, 96)
         )
 
-        simple_model.to(device)
-        simple_model.train()
-        optimizer = torch.optim.Adam(simple_model.parameters(), lr=1e-3)
+        simple_test_model.to(device)
+        simple_test_model.train()
+        optimizer = torch.optim.Adam(simple_test_model.parameters(), lr=1e-3)
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         # Train for one batch
         images, labels = next(iter(train_loader))
         images, labels = images.to(device), labels.to(device)
 
         # Forward pass
-        logits = simple_model(images)
-        loss = simple_model.loss_fn(logits, labels)
+        logits = simple_test_model(images)
+        loss = loss_fn(logits, labels)
 
         # Backward pass
         optimizer.zero_grad()
@@ -246,6 +247,6 @@ class TestDatasetIntegration:
         assert not torch.isnan(loss)  # Loss should not be NaN
 
         # Verify gradients were computed
-        for param in simple_model.parameters():
+        for param in simple_test_model.parameters():
             if param.requires_grad:
                 assert param.grad is not None
