@@ -1,0 +1,4 @@
+# Additional dependencies for RunPod cloud training
+runpod
+wandb
+requests 

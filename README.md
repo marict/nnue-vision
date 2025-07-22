@@ -1,6 +1,6 @@
 # NNUE-Vision
 
-A minimal computer vision neural network based on the NNUE (Efficiently Updatable Neural Network) architecture, adapted for image classification tasks.
+> Modern NNUE techniques applied to computer vision tasks
 
 ## Overview
 
@@ -18,39 +18,70 @@ This project started as the original [NNUE PyTorch](https://github.com/official-
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Configuration-Based Training (New!)
+
+The project now supports flexible configuration files for easy experiment management:
 
 ```bash
-pip install -r requirements.txt
+# Quick testing (5 epochs, minimal setup)
+python train_minimal.py --config config/train_minimal.py
+
+# Full training with wandb logging
+python train.py --config config/train_default.py
+
+# Custom experiment
+python train.py --config examples/custom_config_example.py --batch_size 64
 ```
 
-### 2. Run Minimal Training
+Create your own config files to define training parameters:
+```python
+# my_config.py
+name = "my_experiment"
+batch_size = 64
+max_epochs = 30
+learning_rate = 2e-3
+use_wandb = True
+# ... and more
+```
 
-The easiest way to get started:
+📖 **See [Configuration System Documentation](docs/configuration_system.md) for complete details**
+
+### Legacy Training (Command Line)
+
+You can still use the original command-line interface:
 
 ```bash
+# Minimal training for quick testing
 python train_minimal.py
+
+# Full training with wandb logging
+python train.py --batch_size 32 --max_epochs 50 --learning_rate 1e-3
 ```
 
-This will:
-- Download the Visual Wake Words dataset automatically
-- Train a simple CNN for person/no-person detection
-- Save the trained model as `visual_wake_words_model.pt`
+### 4. Comprehensive Experiment Tracking with Weights & Biases
 
-### 3. Advanced Training
-
-For more control over training parameters:
+The training script now includes comprehensive wandb logging for detailed experiment tracking:
 
 ```bash
-python train.py --max_epochs 50 --batch_size 64 --learning_rate 0.001
+# Set your wandb API key
+export WANDB_API_KEY=your_api_key_here
+
+# Run training with wandb logging
+python train.py --project_name my_experiment --note "baseline_run"
+
+# Run multiple experiments for comparison
+python scripts/train_with_wandb.py
 ```
 
-Available options:
-- `--batch_size`: Batch size for training (default: 32)
-- `--max_epochs`: Maximum number of epochs (default: 50)  
-- `--learning_rate`: Learning rate (default: 1e-3)
-- `--image_size`: Input image size (default: 96)
-- `--gpus`: GPUs to use (e.g., "0,1" or leave empty for auto)
+**Wandb Features:**
+- 🔍 **Detailed Metrics**: Training/validation loss, accuracy, precision, recall, F1
+- 📊 **System Monitoring**: GPU usage, memory consumption, training speed
+- 🎯 **Gradient Analysis**: Gradient norms, parameter tracking, optimization insights
+- 📈 **Visualizations**: Confusion matrices, sample predictions, learning curves
+- 🏷️ **Model Artifacts**: Automatic model saving and versioning
+- ⚡ **Performance Tracking**: Step timing, throughput, resource utilization
+
+See [`docs/wandb_logging.md`](docs/wandb_logging.md) for complete documentation.
 
 ## Dataset: Visual Wake Words
 
@@ -92,8 +123,15 @@ Dense(2) → Softmax
 - `train.py` - Full training script with all options
 - `train_minimal.py` - Simple training script for quick demos
 
+### Scripts and Examples
+- `scripts/train_with_wandb.py` - Example script for running multiple wandb experiments
+
 ### Dependencies  
 - `requirements.txt` - Python package dependencies
+
+### Documentation
+- `docs/wandb_logging.md` - Complete guide to wandb experiment tracking
+- `docs/configuration_system.md` - Configuration system documentation
 
 ### Logs and Outputs
 - `logs/` - TensorBoard logs and model checkpoints

@@ -6,29 +6,55 @@ This script demonstrates how to train a simple CNN on the Visual Wake Words data
 It's been stripped down from the original chess NNUE code to focus on computer vision.
 
 Usage:
-    python train_minimal.py
+    python train_minimal.py [--config CONFIG_PATH]
 
 The script will:
-1. Download the Visual Wake Words dataset automatically
-2. Train a simple CNN for person/no-person classification
-3. Save the trained model and logs
+1. Load configuration from a Python config file
+2. Download the Visual Wake Words dataset automatically
+3. Train a simple CNN for person/no-person classification
+4. Save the trained model and logs
 """
+
+import argparse
+from pathlib import Path
 
 import pytorch_lightning as pl
 
+from config import ConfigError, load_config
 from dataset import create_data_loaders
 from model import ModelParams, SimpleCNN
 
 
 def main():
-    # Set random seed for reproducibility
-    pl.seed_everything(42)
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Minimal NNUE-Vision training with config support"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="config/train_minimal.py",
+        help="Path to the configuration file",
+    )
+    args = parser.parse_args()
 
-    # Model configuration
+    # Load configuration
+    try:
+        print(f"Loading configuration from: {args.config}")
+        config = load_config(args.config)
+        print(f"Configuration loaded: {config.name}")
+    except ConfigError as e:
+        print(f"Error loading configuration: {e}")
+        return 1
+
+    # Set random seed for reproducibility
+    pl.seed_everything(getattr(config, "seed", 42))
+
+    # Model configuration from config file
     model_params = ModelParams(
-        input_size=(96, 96),  # Standard size for Visual Wake Words
-        num_classes=2,  # person/no person
-        learning_rate=1e-3,
+        input_size=getattr(config, "input_size", (96, 96)),
+        num_classes=getattr(config, "num_classes", 2),
+        learning_rate=getattr(config, "learning_rate", 1e-3),
     )
 
     # Create model
@@ -37,24 +63,28 @@ def main():
     print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
 
     # Create data loaders (this will download the dataset if needed)
-    print("\nLoading Visual Wake Words dataset...")
+    print(f"\nLoading {getattr(config, 'dataset', 'Visual Wake Words')} dataset...")
     train_loader, val_loader, test_loader = create_data_loaders(
-        batch_size=32, num_workers=2, target_size=(96, 96)  # Reduced for stability
+        batch_size=getattr(config, "batch_size", 32),
+        num_workers=getattr(config, "num_workers", 2),
+        target_size=getattr(config, "input_size", (96, 96)),
     )
 
-    # Set up trainer with minimal configuration
+    # Set up trainer with configuration
     trainer = pl.Trainer(
-        max_epochs=10,  # Small number for quick demo
-        accelerator="auto",  # Use GPU if available, CPU otherwise
-        devices="auto",  # Use all available devices
-        log_every_n_steps=50,
-        enable_checkpointing=True,
-        enable_progress_bar=True,
-        deterministic=True,
+        max_epochs=getattr(config, "max_epochs", 10),
+        accelerator=getattr(config, "accelerator", "auto"),
+        devices=getattr(config, "devices", "auto"),
+        log_every_n_steps=getattr(config, "log_interval", 50),
+        enable_checkpointing=getattr(config, "always_save_checkpoint", True),
+        enable_progress_bar=getattr(config, "enable_progress_bar", True),
+        deterministic=getattr(config, "deterministic", True),
+        check_val_every_n_epoch=getattr(config, "check_val_every_n_epoch", 1),
     )
 
     # Train the model
     print(f"\nStarting training...")
+    print(f"Configuration: {config.name}")
     print(f"Training on {len(train_loader.dataset)} samples")
     print(f"Validating on {len(val_loader.dataset)} samples")
 
@@ -70,8 +100,9 @@ def main():
     # Save the model
     import torch
 
-    torch.save(model.state_dict(), "visual_wake_words_model.pt")
-    print("Model saved as 'visual_wake_words_model.pt'")
+    model_filename = f"{getattr(config, 'name', 'visual_wake_words_model')}.pt"
+    torch.save(model.state_dict(), model_filename)
+    print(f"Model saved as '{model_filename}'")
 
 
 if __name__ == "__main__":

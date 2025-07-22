@@ -10,3 +10,6 @@ pytorch-lightning
 torch
 torchvision
 pillow
+wandb
+torchmetrics
+seaborn
