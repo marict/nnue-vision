@@ -103,7 +103,7 @@ Tests are configured to:
 The `conftest.py` file provides shared fixtures:
 - `device` - Best available device (CPU/GPU)
 - `model_params` - Standard model parameters
-- `simple_model` - Basic SimpleCNN instance
+- `nnue_model` - Basic NNUE instance
 - `trained_model` - Pre-trained model for testing
 - `sample_batch` - Sample batch of data
 - `data_loaders` - Small data loaders for testing

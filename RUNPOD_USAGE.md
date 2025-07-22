@@ -38,9 +38,6 @@ python runpod_service.py train --max_epochs 50 --batch_size 32
 # Advanced training with custom GPU
 python runpod_service.py train --max_epochs 100 --batch_size 64 --gpu-type "NVIDIA A40" --note "experiment-1"
 
-# Minimal training script
-python runpod_service.py train --script train_minimal.py
-
 # Keep pod alive after training (for debugging/analysis)
 python runpod_service.py train --max_epochs 50 --keep-alive
 ```
@@ -128,9 +125,9 @@ python runpod_service.py train \
     --note "large-images"
 ```
 
-### Quick Test with Minimal Script
+### Quick Test with Minimal Settings
 ```bash
-python runpod_service.py train --script train_minimal.py --note "quick-test"
+python runpod_service.py train --max_epochs 5 --batch_size 32 --note "quick-test"
 ```
 
 ## Stopping Pods

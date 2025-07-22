@@ -1,61 +1,46 @@
-# NNUE-Vision
+# NNUE-Vision 
 
-> Modern NNUE techniques applied to computer vision tasks
-
-## Overview
-
-This project started as the original [NNUE PyTorch](https://github.com/official-stockfish/nnue-pytorch) codebase designed for chess evaluation, but has been stripped down and adapted for computer vision tasks. The current implementation focuses on binary image classification using the **Visual Wake Words** dataset.
-
-### What's Changed from Original NNUE
-
-- ✅ **Removed**: All chess-specific components (feature extraction, piece evaluation, game data loading)
-- ✅ **Removed**: Complex C++ data loaders and chess position encoding  
-- ✅ **Removed**: Chess-specific loss functions and evaluation metrics
-- ✅ **Added**: Simple CNN architecture for image classification
-- ✅ **Added**: Visual Wake Words dataset integration via TensorFlow Datasets
-- ✅ **Added**: Standard computer vision preprocessing and data augmentation
-- ✅ **Kept**: PyTorch Lightning training framework for easy experimentation
+Neural Network Efficiently Updatable (NNUE) adapted for computer vision tasks, specifically Visual Wake Words detection.
 
 ## Quick Start
 
-### Configuration-Based Training (New!)
-
-The project now supports flexible configuration files for easy experiment management:
+### Basic Training
 
 ```bash
-# Quick testing (5 epochs, minimal setup)
-python train_minimal.py --config config/train_minimal.py
+# Train with default configuration
+python train.py
 
-# Full training with wandb logging
+# Train with custom configuration  
 python train.py --config config/train_default.py
 
-# Custom experiment
-python train.py --config examples/custom_config_example.py --batch_size 64
+# Override specific parameters
+python train.py --config config/train_default.py --max_epochs 50 --batch_size 64
 ```
 
-Create your own config files to define training parameters:
-```python
-# my_config.py
-name = "my_experiment"
-batch_size = 64
-max_epochs = 30
-learning_rate = 2e-3
-use_wandb = True
-# ... and more
-```
-
-📖 **See [Configuration System Documentation](docs/configuration_system.md) for complete details**
-
-### Legacy Training (Command Line)
-
-You can still use the original command-line interface:
+### Cloud Training (RunPod)
 
 ```bash
-# Minimal training for quick testing
-python train_minimal.py
+# Install cloud dependencies
+pip install -r requirements-runpod.txt
 
-# Full training with wandb logging
-python train.py --batch_size 32 --max_epochs 50 --learning_rate 1e-3
+# Start cloud training
+python runpod_service.py train --max_epochs 100 --batch_size 64
+
+# See RUNPOD_USAGE.md for detailed instructions
+```
+
+## Installation
+
+```bash
+# Clone repository
+git clone https://github.com/your-username/nnue-vision.git
+cd nnue-vision
+
+# Install dependencies
+pip install -r requirements.txt
+
+# For cloud training
+pip install -r requirements-runpod.txt
 ```
 
 ### 4. Comprehensive Experiment Tracking with Weights & Biases
@@ -120,8 +105,7 @@ Dense(2) → Softmax
 ### Core Files
 - `model.py` - CNN model definition using PyTorch Lightning
 - `dataset.py` - Visual Wake Words dataset loader and preprocessing
-- `train.py` - Full training script with all options
-- `train_minimal.py` - Simple training script for quick demos
+- `train.py` - Training script with wandb/tensorboard logging support
 
 ### Scripts and Examples
 - `scripts/train_with_wandb.py` - Example script for running multiple wandb experiments

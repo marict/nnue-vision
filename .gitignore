@@ -6,3 +6,9 @@ testing
 libtraining_data_loader.*
 easy_train_data
 *.yaml
+
+
+checkpoints/
+wandb/
+
+.DS_Store

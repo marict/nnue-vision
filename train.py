@@ -14,7 +14,35 @@ from pytorch_lightning.loggers import WandbLogger
 
 from config import ConfigError, load_config
 from dataset import create_data_loaders
-from model import ModelParams, SimpleCNN
+from model import NNUE, LossParams
+
+
+def adapt_batch_for_nnue(batch, num_ls_buckets=8):
+    """
+    Adapt batch from dataset format (images, labels) to NNUE format.
+    
+    Args:
+        batch: Tuple of (images, labels) from dataset
+        num_ls_buckets: Number of layer stack buckets
+        
+    Returns:
+        Tuple of (images, targets, scores, layer_stack_indices) for NNUE
+    """
+    images, labels = batch
+    batch_size = images.shape[0]
+    device = images.device  # Get device from images
+    
+    # Convert labels to targets (float format for loss computation)
+    targets = labels.float().to(device)
+    
+    # Generate synthetic scores (in real NNUE training, these would be search evaluation scores)
+    # For visual wake words, we'll use dummy scores
+    scores = torch.zeros_like(targets, device=device)
+    
+    # Generate random layer stack indices (bucket selection) on the same device
+    layer_stack_indices = torch.randint(0, num_ls_buckets, (batch_size,), device=device)
+    
+    return images, targets, scores, layer_stack_indices
 
 
 class WandbMetricsCallback(pl.Callback):
@@ -178,12 +206,12 @@ def log_sample_predictions(model, val_loader, device, num_samples=8):
     wandb.log({"validation/sample_predictions": wandb_images})
 
 
-def setup_wandb_logger(config, model_params) -> WandbLogger:
+def setup_wandb_logger(config) -> WandbLogger:
     """Set up wandb logger with comprehensive configuration."""
 
     # Generate run name with timestamp and key parameters
     run_name = (
-        f"cnn-lr{config.learning_rate}-bs{config.batch_size}-img{config.image_size}"
+        f"nnue-lr{config.learning_rate}-bs{config.batch_size}-img{getattr(config, 'input_size', (96, 96))[0]}"
     )
     if hasattr(config, "note") and config.note:
         run_name += f"-{config.note}"
@@ -191,14 +219,16 @@ def setup_wandb_logger(config, model_params) -> WandbLogger:
     # Create wandb config
     wandb_config = {
         # Model parameters
-        "model/learning_rate": model_params.learning_rate,
-        "model/input_size": model_params.input_size,
-        "model/num_classes": model_params.num_classes,
+        "model/learning_rate": config.learning_rate,
+        "model/input_size": getattr(config, "input_size", (96, 96)),
+        "model/num_classes": getattr(config, "num_classes", 2),
+        "model/num_ls_buckets": getattr(config, "num_ls_buckets", 8),
+        "model/visual_threshold": getattr(config, "visual_threshold", 0.0),
         # Training parameters
         "train/batch_size": config.batch_size,
         "train/max_epochs": config.max_epochs,
-        "train/image_size": config.image_size,
-        "train/num_workers": config.num_workers,
+        "train/image_size": getattr(config, "input_size", (96, 96))[0],
+        "train/num_workers": getattr(config, "num_workers", 4),
         # System parameters
         "system/cuda_available": torch.cuda.is_available(),
         "system/torch_version": torch.__version__,
@@ -225,6 +255,93 @@ def setup_wandb_logger(config, model_params) -> WandbLogger:
     )
 
     return wandb_logger
+
+
+class NNUEWrapper(pl.LightningModule):
+    """
+    Wrapper for NNUE model that adapts data format from standard (images, labels) 
+    to NNUE format (images, targets, scores, layer_stack_indices).
+    """
+    
+    def __init__(self, nnue_model):
+        super().__init__()
+        self.nnue = nnue_model
+        self.num_ls_buckets = nnue_model.num_ls_buckets
+    
+    def _compute_loss(self, batch, batch_idx):
+        """Compute loss without logging (internal version of NNUE step_)"""
+        # This replicates the NNUE step_ method but without logging
+        
+        # We clip weights at the start of each step. This means that after
+        # the last step the weights might be outside of the desired range.
+        # They should be also clipped accordingly in the serializer.
+        self.nnue._clip_weights()
+
+        (
+            images,  # RGB images (B, 3, 96, 96)
+            targets,  # Target labels
+            scores,  # Search scores
+            layer_stack_indices,  # Bucket indices
+        ) = batch
+
+        # Forward pass
+        scorenet = self.nnue(images, layer_stack_indices) * self.nnue.nnue2score
+
+        p = self.nnue.loss_params
+        # convert the network and search scores to an estimate match result
+        # based on the win_rate_model, with scalings and offsets optimized
+        q = (scorenet - p.in_offset) / p.in_scaling
+        qm = (-scorenet - p.in_offset) / p.in_scaling
+        qf = 0.5 * (1.0 + q.sigmoid() - qm.sigmoid())
+
+        s = (scores - p.out_offset) / p.out_scaling
+        sm = (-scores - p.out_offset) / p.out_scaling
+        pf = 0.5 * (1.0 + s.sigmoid() - sm.sigmoid())
+
+        # blend that eval based score with the actual targets
+        t = targets
+        actual_lambda = p.start_lambda + (p.end_lambda - p.start_lambda) * (
+            self.current_epoch / self.nnue.max_epoch
+        )
+        pt = pf * actual_lambda + t * (1.0 - actual_lambda)
+
+        # use a MSE-like loss function
+        loss = torch.pow(torch.abs(pt - qf), p.pow_exp)
+        if p.qp_asymmetry != 0.0:
+            loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
+        loss = loss.mean()
+
+        return loss
+    
+    def training_step(self, batch, batch_idx):
+        adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
+        # Compute loss without internal logging
+        loss = self._compute_loss(adapted_batch, batch_idx)
+        # Log using the wrapper's logging context
+        self.log("train_loss", loss)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
+        # Compute loss without internal logging
+        loss = self._compute_loss(adapted_batch, batch_idx)
+        # Log using the wrapper's logging context
+        self.log("val_loss", loss)
+        return loss
+    
+    def test_step(self, batch, batch_idx):
+        adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
+        # Compute loss without internal logging
+        loss = self._compute_loss(adapted_batch, batch_idx)
+        # Log using the wrapper's logging context
+        self.log("test_loss", loss)
+        return loss
+    
+    def configure_optimizers(self):
+        return self.nnue.configure_optimizers()
+    
+    def forward(self, images, layer_stack_indices):
+        return self.nnue.forward(images, layer_stack_indices)
 
 
 def main():
@@ -297,15 +414,23 @@ def main():
     # Set random seed for reproducibility
     pl.seed_everything(getattr(config, "seed", 42))
 
-    # Set up model parameters from config
-    model_params = ModelParams(
-        input_size=getattr(config, "input_size", (96, 96)),
-        num_classes=getattr(config, "num_classes", 2),
-        learning_rate=getattr(config, "learning_rate", 1e-3),
+    # Set up loss parameters from config
+    loss_params = LossParams(
+        start_lambda=getattr(config, "start_lambda", 1.0),
+        end_lambda=getattr(config, "end_lambda", 1.0),
     )
 
-    # Create model
-    model = SimpleCNN(model_params)
+    # Create NNUE model with config parameters
+    nnue_model = NNUE(
+        max_epoch=getattr(config, "max_epochs", 50),
+        lr=getattr(config, "learning_rate", 1e-3),
+        loss_params=loss_params,
+        num_ls_buckets=getattr(config, "num_ls_buckets", 8),
+        visual_threshold=getattr(config, "visual_threshold", 0.0),
+    )
+    
+    # Wrap NNUE model to handle data format adaptation
+    model = NNUEWrapper(nnue_model)
 
     # Create data loaders
     print("Creating data loaders...")
@@ -324,7 +449,7 @@ def main():
 
     # Setup wandb logger if enabled
     if use_wandb:
-        wandb_logger = setup_wandb_logger(config, model_params)
+        wandb_logger = setup_wandb_logger(config)
         loggers.append(wandb_logger)
 
     # Optional TensorBoard logger
@@ -339,15 +464,15 @@ def main():
     callbacks = [
         TQDMProgressBar(refresh_rate=getattr(config, "log_interval", 50)),
         ModelCheckpoint(
-            monitor="val_acc",
-            mode="max",
+            monitor="val_loss",
+            mode="min",
             save_top_k=getattr(config, "save_top_k", 3),
-            filename="best-{epoch:02d}-{val_acc:.3f}",
+            filename="best-{epoch:02d}-{val_loss:.3f}",
             save_last=True,
         ),
         EarlyStopping(
-            monitor="val_acc",
-            mode="max",
+            monitor="val_loss",
+            mode="min",
             patience=getattr(config, "patience", 10),
             verbose=True,
         ),
@@ -378,10 +503,11 @@ def main():
     # Log training start
     print(f"Starting training for {getattr(config, 'max_epochs', 50)} epochs...")
     print(f"Configuration: {config.name}")
-    print(f"Model parameters: {model_params}")
+    print(f"Model: NNUE with {getattr(config, 'num_ls_buckets', 8)} layer stacks")
+    print(f"Learning rate: {getattr(config, 'learning_rate', 1e-3)}")
     print(f"Batch size: {getattr(config, 'batch_size', 32)}")
     print(
-        f"Image size: {getattr(config, 'image_size', 96)}x{getattr(config, 'image_size', 96)}"
+        f"Image size: {getattr(config, 'input_size', (96, 96))[0]}x{getattr(config, 'input_size', (96, 96))[1]}"
     )
     if use_wandb and loggers:
         wandb_logger = next(

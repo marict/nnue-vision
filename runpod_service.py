@@ -313,7 +313,7 @@ if __name__ == "__main__":
     t.add_argument(
         "--script",
         default="train.py",
-        help="Training script to run (train.py or train_minimal.py)",
+        help="Training script to run",
     )
 
     args = parser.parse_args()

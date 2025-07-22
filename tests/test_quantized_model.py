@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from quantized_model import QuantizedModelParams, QuantizedNNUE
 
-from model import ModelParams, SimpleCNN
+from model import NNUE, LossParams
 
 
 def test_model_creation():
@@ -24,7 +24,7 @@ def test_model_creation():
     print("🧪 Testing model creation...")
 
     # Test original model
-    original_model = SimpleCNN(ModelParams())
+    original_model = NNUE(LossParams())
     original_params = sum(p.numel() for p in original_model.parameters())
 
     # Test quantized model
@@ -95,7 +95,7 @@ def test_model_sizes():
     print("\n🧪 Testing model sizes...")
 
     # Create models
-    original_model = SimpleCNN(ModelParams())
+    original_model = NNUE(LossParams())
     quantized_model = QuantizedNNUE(QuantizedModelParams())
 
     # Save models temporarily
@@ -217,7 +217,7 @@ def benchmark_inference_speed():
     print("\n🧪 Benchmarking inference speed...")
 
     # Create models
-    original_model = SimpleCNN(ModelParams())
+    original_model = NNUE(LossParams())
     quantized_model = QuantizedNNUE(QuantizedModelParams())
 
     original_model.eval()
