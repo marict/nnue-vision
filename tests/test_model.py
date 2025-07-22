@@ -268,9 +268,16 @@ class TestBackwardPass:
         # Check that gradients accumulated
         for name, param in simple_model.named_parameters():
             if param.grad is not None and name in first_grads:
-                assert not torch.allclose(
-                    param.grad, first_grads[name]
-                ), f"Gradients did not accumulate for {name}"
+                # Use relative tolerance for very small gradients
+                if torch.max(torch.abs(first_grads[name])) > 1e-6:
+                    assert not torch.allclose(
+                        param.grad, first_grads[name], rtol=1e-3, atol=1e-6
+                    ), f"Gradients did not accumulate for {name}"
+                else:
+                    # For very small gradients, just check they're not exactly equal
+                    assert not torch.equal(
+                        param.grad, first_grads[name]
+                    ), f"Gradients did not accumulate for {name}"
 
     def test_gradient_zeroing(self, simple_model, sample_batch, device):
         """Test that gradients can be zeroed."""
@@ -343,16 +350,19 @@ class TestPyTorchLightningIntegration:
 
     def test_configure_optimizers(self, simple_model):
         """Test the configure_optimizers method."""
-        optimizers, schedulers = simple_model.configure_optimizers()
+        config = simple_model.configure_optimizers()
 
-        assert len(optimizers) == 1
-        assert len(schedulers) == 1
+        assert isinstance(config, dict)
+        assert "optimizer" in config
+        assert "lr_scheduler" in config
 
-        optimizer = optimizers[0]
-        scheduler = schedulers[0]
+        optimizer = config["optimizer"]
+        scheduler_config = config["lr_scheduler"]
 
         assert isinstance(optimizer, torch.optim.Adam)
-        assert isinstance(scheduler, torch.optim.lr_scheduler.StepLR)
+        assert isinstance(
+            scheduler_config["scheduler"], torch.optim.lr_scheduler.StepLR
+        )
 
 
 class TestModelPersistence:
