@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
-import time
-import random
-import sys
-import psutil
-import re
-import subprocess
+import argparse
 import importlib
 import importlib.metadata
-import argparse
-import math
 import logging
+import math
+import random
+import re
+import subprocess
+import sys
 import time
+
+import psutil
 
 EXITCODE_OK = 0
 EXITCODE_MISSING_DEPENDENCIES = 2
@@ -268,40 +268,31 @@ def validate_environment_requirements():
 if not validate_environment_requirements():
     sys.exit(EXITCODE_MISSING_DEPENDENCIES)
 
-# Only now import the rest of the required packages
-from asciimatics.widgets import (
-    Frame,
-    ListBox,
-    Layout,
-    Divider,
-    Text,
-    Button,
-    TextBox,
-    Widget,
-    VerticalDivider,
-    MultiColumnListBox,
-    Label,
-    PopUpDialog,
-)
-from asciimatics.scene import Scene
-from asciimatics.screen import Screen
-from asciimatics.exceptions import ResizeScreenError, NextScene, StopApplication
-from asciimatics.utilities import BoxTool
-from asciimatics.constants import SINGLE_LINE, DOUBLE_LINE
-from asciimatics.event import KeyboardEvent, MouseEvent
-from threading import Thread, Lock, Event
-import GPUtil
 import io
 import os
-import requests
-import zipfile
 import shutil
-import urllib.request
-import urllib.parse
 import signal
+import urllib.parse
+import urllib.request
+import zipfile
 from datetime import datetime, timedelta
-from tqdm.auto import tqdm
 from pathlib import Path
+from threading import Event, Lock, Thread
+
+import GPUtil
+import requests
+from asciimatics.constants import DOUBLE_LINE, SINGLE_LINE
+from asciimatics.event import KeyboardEvent, MouseEvent
+from asciimatics.exceptions import (NextScene, ResizeScreenError,
+                                    StopApplication)
+from asciimatics.scene import Scene
+from asciimatics.screen import Screen
+from asciimatics.utilities import BoxTool
+# Only now import the rest of the required packages
+from asciimatics.widgets import (Button, Divider, Frame, Label, Layout,
+                                 ListBox, MultiColumnListBox, PopUpDialog,
+                                 Text, TextBox, VerticalDivider, Widget)
+from tqdm.auto import tqdm
 
 # Specify which versions of ordo and c-chess-cli we want.
 # We rely on specific well-tested commits because we know exactly what we need.
@@ -330,14 +321,16 @@ def terminate_process_on_exit(process):
             # We cannot execute from string so we write the script to a file.
             # Doesn't do anything if the file already exists.
             with open(".process_watchdog_helper.bat", "x") as file:
-                file.write(""":waitforpid
+                file.write(
+                    """:waitforpid
 tasklist /nh /fi "pid eq %1" 2>nul | find "%1" >nul
 if %ERRORLEVEL%==0 (
     timeout /t 5 /nobreak >nul
     goto :waitforpid
 ) else (
     wmic process where processid="%2" call terminate >nul
-)""")
+)"""
+                )
         except:
             pass
 
@@ -457,6 +450,7 @@ if sys.platform == "win32":
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.release()
             self.close()
+
 else:
     import fcntl
 
@@ -2492,17 +2486,15 @@ def setup_book(directory, args):
 
     if not os.path.exists(destination_file_path):
         if temp_filename != filename and not os.path.exists(destination_temp_file_path):
-            with (
-                TqdmDownloadProgressBar(
-                    unit="B",
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    miniters=1,
-                    desc=temp_filename,
-                    file=TqdmToLogger(),
-                    mininterval=0.1,  # at least 0.1s between update so the logfile doesn't get polluted.
-                ) as progress_bar
-            ):
+            with TqdmDownloadProgressBar(
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+                miniters=1,
+                desc=temp_filename,
+                file=TqdmToLogger(),
+                mininterval=0.1,  # at least 0.1s between update so the logfile doesn't get polluted.
+            ) as progress_bar:
                 urllib.request.urlretrieve(
                     url,
                     filename=destination_temp_file_path,
@@ -2831,9 +2823,11 @@ def main():
     network_testing = NetworkTesting(
         nnue_pytorch_directory=nnue_pytorch_directory,
         root_dir=os.path.join(experiment_directory, "training"),
-        ordo_exe=None
-        if args.do_approximate_ordo
-        else make_ordo_executable_path(ordo_directory),
+        ordo_exe=(
+            None
+            if args.do_approximate_ordo
+            else make_ordo_executable_path(ordo_directory)
+        ),
         c_chess_cli_exe=make_c_chess_cli_executable_path(c_chess_cli_directory),
         stockfish_base_exe=make_stockfish_executable_path(stockfish_base_directory),
         stockfish_test_exe=make_stockfish_executable_path(stockfish_test_directory),
