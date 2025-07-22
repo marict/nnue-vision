@@ -68,6 +68,7 @@ def main():
         batch_size=getattr(config, "batch_size", 32),
         num_workers=getattr(config, "num_workers", 2),
         target_size=getattr(config, "input_size", (96, 96)),
+        subset=getattr(config, "subset", 1.0),
     )
 
     # Set up trainer with configuration

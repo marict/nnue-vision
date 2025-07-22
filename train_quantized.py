@@ -333,6 +333,7 @@ def main():
         batch_size=getattr(config, "batch_size", 64),
         num_workers=getattr(config, "num_workers", 4),
         target_size=getattr(config, "input_size", (96, 96)),
+        subset=getattr(config, "subset", 1.0),
     )
 
     # Set up logging

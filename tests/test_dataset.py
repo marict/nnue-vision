@@ -114,10 +114,58 @@ class TestDataLoaders:
         assert val_loader.batch_size == 4
         assert test_loader.batch_size == 4
 
-        # Check dataset sizes
+        # Check dataset sizes (default subset=1.0)
         assert len(train_loader.dataset) == 5000
         assert len(val_loader.dataset) == 1000
         assert len(test_loader.dataset) == 1000
+
+    def test_create_data_loaders_with_subset(self):
+        """Test that data loaders respect the subset parameter."""
+        # Test with 50% subset
+        train_loader, val_loader, test_loader = create_data_loaders(
+            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.5
+        )
+
+        # Check dataset sizes are halved
+        assert len(train_loader.dataset) == 2500  # 5000 * 0.5
+        assert len(val_loader.dataset) == 500  # 1000 * 0.5
+        assert len(test_loader.dataset) == 500  # 1000 * 0.5
+
+        # Test with 10% subset
+        train_loader, val_loader, test_loader = create_data_loaders(
+            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.1
+        )
+
+        # Check dataset sizes are 10%
+        assert len(train_loader.dataset) == 500  # 5000 * 0.1
+        assert len(val_loader.dataset) == 100  # 1000 * 0.1
+        assert len(test_loader.dataset) == 100  # 1000 * 0.1
+
+    def test_create_data_loaders_subset_validation(self):
+        """Test that subset parameter validation works correctly."""
+        import pytest
+
+        # Test invalid subset values
+        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
+            create_data_loaders(subset=0.0)  # 0.0 is not allowed
+
+        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
+            create_data_loaders(subset=1.5)  # > 1.0 is not allowed
+
+        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
+            create_data_loaders(subset=-0.1)  # negative is not allowed
+
+    def test_create_data_loaders_minimum_samples(self):
+        """Test that minimum sample size is enforced."""
+        # Test with very small subset that would result in 0 samples
+        train_loader, val_loader, test_loader = create_data_loaders(
+            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.0001
+        )
+
+        # Should have at least 1 sample each
+        assert len(train_loader.dataset) >= 1
+        assert len(val_loader.dataset) >= 1
+        assert len(test_loader.dataset) >= 1
 
     def test_data_loader_iteration(self):
         """Test that data loaders can be iterated over."""

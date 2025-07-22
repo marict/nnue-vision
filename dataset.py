@@ -102,7 +102,7 @@ class SyntheticVisualWakeWordsDataset(Dataset):
         return image, torch.tensor(label, dtype=torch.long)
 
 
-def create_data_loaders(batch_size=32, num_workers=4, target_size=(96, 96)):
+def create_data_loaders(batch_size=32, num_workers=4, target_size=(96, 96), subset=1.0):
     """
     Create train, validation, and test data loaders for synthetic Visual Wake Words dataset.
 
@@ -110,20 +110,40 @@ def create_data_loaders(batch_size=32, num_workers=4, target_size=(96, 96)):
         batch_size (int): Batch size for data loaders
         num_workers (int): Number of worker processes for data loading
         target_size (tuple): Target image size (width, height)
+        subset (float): Fraction of dataset to use (0.0 < subset <= 1.0)
 
     Returns:
         tuple: (train_loader, val_loader, test_loader)
     """
 
+    # Validate subset parameter
+    if not (0.0 < subset <= 1.0):
+        raise ValueError(f"subset must be between 0.0 and 1.0, got {subset}")
+
+    # Base dataset sizes
+    base_train_samples = 5000
+    base_val_samples = 1000
+    base_test_samples = 1000
+
+    # Calculate actual sample sizes based on subset
+    train_samples = int(base_train_samples * subset)
+    val_samples = int(base_val_samples * subset)
+    test_samples = int(base_test_samples * subset)
+
+    # Ensure we have at least 1 sample per dataset
+    train_samples = max(1, train_samples)
+    val_samples = max(1, val_samples)
+    test_samples = max(1, test_samples)
+
     # Create datasets with different sizes for train/val/test
     train_dataset = SyntheticVisualWakeWordsDataset(
-        split="train", target_size=target_size, num_samples=5000
+        split="train", target_size=target_size, num_samples=train_samples
     )
     val_dataset = SyntheticVisualWakeWordsDataset(
-        split="validation", target_size=target_size, num_samples=1000
+        split="validation", target_size=target_size, num_samples=val_samples
     )
     test_dataset = SyntheticVisualWakeWordsDataset(
-        split="test", target_size=target_size, num_samples=1000
+        split="test", target_size=target_size, num_samples=test_samples
     )
 
     # Create data loaders
@@ -249,7 +269,8 @@ if __name__ == "__main__":
     # Get dataset statistics
     get_dataset_stats()
 
-    # Create data loaders
+    # Create data loaders (full dataset)
+    print("\nTesting with full dataset (subset=1.0)...")
     train_loader, val_loader, test_loader = create_data_loaders(
         batch_size=8, num_workers=0
     )
@@ -267,6 +288,13 @@ if __name__ == "__main__":
     class_1_count = (batch_labels == 1).sum().item()
     print(
         f"Class distribution in batch: class 0 (no-person): {class_0_count}, class 1 (person): {class_1_count}"
+    )
+
+    # Test with subset functionality
+    print("\nTesting subset functionality...")
+    print("Creating smaller dataset with subset=0.1...")
+    small_train_loader, small_val_loader, small_test_loader = create_data_loaders(
+        batch_size=8, num_workers=0, subset=0.1
     )
 
     print("Dataset loader test completed successfully!")

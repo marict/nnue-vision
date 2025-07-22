@@ -13,6 +13,7 @@ num_workers = 2  # Conservative for local machines
 input_size = (96, 96)  # Square input images
 num_classes = 2  # person/no person classification
 learning_rate = 1e-3
+subset = 0.1
 
 # Training settings
 max_epochs = 10  # Quick training for local testing

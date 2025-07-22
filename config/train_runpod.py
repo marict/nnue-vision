@@ -13,6 +13,7 @@ num_workers = 8  # Utilize cloud CPU cores
 input_size = (96, 96)
 num_classes = 2
 learning_rate = 1e-3
+subset = 1.0  # Fraction of dataset to use (0.0 < subset <= 1.0)
 
 # Training settings (long-running cloud job)
 max_epochs = 100  # Extended training for better results
