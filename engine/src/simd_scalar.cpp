@@ -30,7 +30,7 @@ void conv2d_unrolled_scalar(const float* input, const int8_t* weights,
     // Output: [8, 8, 12] in HWC format
     // Weights: [12, 3, 3, 3] in NCHW format
     
-    constexpr int stride = 12;
+    constexpr int stride = 3;  // 96/32 = 3 for aggressive scaling
     constexpr int padding = 1;
     
     for (int out_c = 0; out_c < OUTPUT_CHANNELS; ++out_c) {

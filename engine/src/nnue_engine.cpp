@@ -345,16 +345,12 @@ float NNUEEvaluator::evaluate(const float* image_data, int layer_stack_index) co
         layer_stack_index = 0;
     }
     
-    // Step 1: Convolution 96x96x3 -> 8x8x12
+    // Step 1: Convolution 96x96x3 -> 32x32x64
     conv_layer_.forward(image_data, conv_output_.data());
     
-    // Step 2: Extract active features (binary threshold)
-    active_features_.clear();
-    for (int i = 0; i < GRID_FEATURES; ++i) {
-        if (static_cast<float>(conv_output_[i]) > visual_threshold_) {
-            active_features_.push_back(i);
-        }
-    }
+    // Step 2: Convert to uint64 grid and extract active features efficiently
+    feature_grid_.from_conv_output(conv_output_.data(), visual_threshold_);
+    feature_grid_.extract_features(active_features_);
     
     // Step 3: Feature transformer (sparse -> dense)
     feature_transformer_.forward(active_features_, ft_output_.data());

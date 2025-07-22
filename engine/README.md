@@ -14,19 +14,22 @@ A high-performance C++ implementation of NNUE (Efficiently Updatable Neural Netw
 
 The NNUE engine implements a specialized neural network architecture for visual wake words:
 
-1. **Convolution Layer**: 96x96x3 → 8x8x12 downsampling with unrolled stride-12 convolution
-2. **Feature Transformer**: Sparse 8x8x12 binary features → Dense 3072-dimensional representation
-3. **Layer Stacks**: Multiple dense networks (3072 → 15 → 32 → 1) for different contexts
+1. **Convolution Layer**: 96x96x3 → 32x32x64 downsampling with unrolled stride-3 convolution
+2. **Feature Transformer**: Sparse 32x32x64 binary features → Dense 512-dimensional representation  
+3. **Layer Stacks**: Multiple dense networks (512 → 15 → 32 → 1) for different contexts
 4. **Quantization**: Int8/Int16 weights with proper scaling for efficient computation
+5. **uint64 Grid**: Each pixel stores exactly 64 binary features in 1 uint64 for fast bitwise ops
 
 ### Memory Layout
 
 ```
 Input Image (96x96x3 RGB) 
-    ↓ Convolution (stride=12, 3x3 kernel)
-Grid Features (8x8x12 quantized)
+    ↓ Convolution (stride=3, 3x3 kernel)
+Grid Features (32x32x64 quantized) 
+    ↓ uint64 Grid (1 uint64 per pixel)
+Bitwise Operations (popcount, bitscan, parallel ops)
     ↓ Feature Transformer (sparse → dense)
-Dense Features (3072 int16)
+Dense Features (512 int16)
     ↓ Layer Stack (L1 → L2 → Output)
 Final Score (float)
 ```

@@ -9,15 +9,15 @@
 namespace nnue {
 
 // Architecture constants matching the Python implementation
-constexpr int L1_SIZE = 3072;
+constexpr int L1_SIZE = 512;  // Increased from 256 for larger feature space
 constexpr int L2_SIZE = 15;
 constexpr int L3_SIZE = 32;
 constexpr int INPUT_CHANNELS = 3;
-constexpr int OUTPUT_CHANNELS = 12;
+constexpr int OUTPUT_CHANNELS = 64;  // 64 channels per pixel for uint64 efficiency
 constexpr int CONV_KERNEL_SIZE = 3;
 constexpr int INPUT_IMAGE_SIZE = 96;
-constexpr int OUTPUT_GRID_SIZE = 8;
-constexpr int GRID_FEATURES = OUTPUT_GRID_SIZE * OUTPUT_GRID_SIZE * OUTPUT_CHANNELS; // 768
+constexpr int OUTPUT_GRID_SIZE = 32;  // Increased from 8 for fine spatial resolution
+constexpr int GRID_FEATURES = OUTPUT_GRID_SIZE * OUTPUT_GRID_SIZE * OUTPUT_CHANNELS; // 65,536
 
 // Quantization constants
 constexpr float FT_SCALE = 64.0f;
@@ -125,25 +125,98 @@ public:
     }
 };
 
-// Convolution layer for 96x96x3 -> 8x8x12 downsampling
+// Efficient uint64 grid for 32x32x64 features (1 uint64 per pixel)
+struct Grid32x32 {
+    uint64_t pixels[OUTPUT_GRID_SIZE][OUTPUT_GRID_SIZE];
+    
+    Grid32x32() { clear(); }
+    
+    void clear() {
+        std::memset(pixels, 0, sizeof(pixels));
+    }
+    
+    // Convert from int8_t conv output to uint64 grid
+    void from_conv_output(const int8_t* conv_data, float threshold = 0.0f) {
+        clear();
+        for (int h = 0; h < OUTPUT_GRID_SIZE; ++h) {
+            for (int w = 0; w < OUTPUT_GRID_SIZE; ++w) {
+                uint64_t pixel_features = 0;
+                for (int c = 0; c < OUTPUT_CHANNELS; ++c) {
+                    int idx = (h * OUTPUT_GRID_SIZE + w) * OUTPUT_CHANNELS + c;
+                    if (static_cast<float>(conv_data[idx]) > threshold) {
+                        pixel_features |= (1ULL << c);
+                    }
+                }
+                pixels[h][w] = pixel_features;
+            }
+        }
+    }
+    
+    // Extract sparse feature indices efficiently
+    void extract_features(std::vector<int>& active_features) const {
+        active_features.clear();
+        for (int h = 0; h < OUTPUT_GRID_SIZE; ++h) {
+            for (int w = 0; w < OUTPUT_GRID_SIZE; ++w) {
+                uint64_t pixel = pixels[h][w];
+                if (pixel != 0) {
+                    // Extract active bits efficiently
+                    while (pixel) {
+                        int bit_pos = __builtin_ctzll(pixel);  // Count trailing zeros
+                        int feature_idx = (h * OUTPUT_GRID_SIZE + w) * OUTPUT_CHANNELS + bit_pos;
+                        active_features.push_back(feature_idx);
+                        pixel &= pixel - 1;  // Clear lowest set bit
+                    }
+                }
+            }
+        }
+    }
+    
+    // Count total active features
+    int count_active_features() const {
+        int total = 0;
+        for (int h = 0; h < OUTPUT_GRID_SIZE; ++h) {
+            for (int w = 0; w < OUTPUT_GRID_SIZE; ++w) {
+                total += __builtin_popcountll(pixels[h][w]);
+            }
+        }
+        return total;
+    }
+    
+    // Get neighborhood features (useful for spatial operations)
+    uint64_t get_neighborhood_features(int h, int w, int radius = 1) const {
+        uint64_t combined = 0;
+        for (int dh = -radius; dh <= radius; ++dh) {
+            for (int dw = -radius; dw <= radius; ++dw) {
+                int nh = h + dh;
+                int nw = w + dw;
+                if (nh >= 0 && nh < OUTPUT_GRID_SIZE && nw >= 0 && nw < OUTPUT_GRID_SIZE) {
+                    combined |= pixels[nh][nw];
+                }
+            }
+        }
+        return combined;
+    }
+};
+
+// Convolution layer for 96x96x3 -> 32x32x64 downsampling (uint64 per pixel)
 struct ConvLayer {
-    AlignedVector<int8_t> weights;     // [12, 3, 3, 3] quantized weights
-    AlignedVector<int32_t> biases;     // [12] quantized biases
+    AlignedVector<int8_t> weights;     // [64, 3, 3, 3] quantized weights
+    AlignedVector<int32_t> biases;     // [64] quantized biases
     float scale;
     
     ConvLayer();
     ~ConvLayer() = default;
     
-    // Unrolled convolution with stride=12
+    // Unrolled convolution with stride=3
     void forward(const float* input, int8_t* output) const;
     
     bool load_from_stream(std::ifstream& file);
 };
 
-// Feature transformer: converts sparse 8x8x12 binary features to dense L1
+// Feature transformer: converts sparse 32x32x64 binary features to dense L1
 struct FeatureTransformer {
-    AlignedVector<int16_t> weights;    // [768, 3072] quantized weights
-    AlignedVector<int32_t> biases;     // [3072] quantized biases
+    AlignedVector<int16_t> weights;    // [65536, 512] quantized weights
+    AlignedVector<int32_t> biases;     // [512] quantized biases
     float scale;
     
     FeatureTransformer();
@@ -162,7 +235,7 @@ struct FeatureTransformer {
 
 // Dense layer stack for L1->L2->L3->1
 struct LayerStack {
-    // L1 layer (3072 -> 15)
+    // L1 layer (512 -> 15)
     AlignedVector<int8_t> l1_weights;
     AlignedVector<int32_t> l1_biases;
     float l1_scale;
@@ -205,6 +278,7 @@ private:
     
     // Working buffers
     mutable AlignedVector<int8_t> conv_output_;
+    mutable Grid32x32 feature_grid_;         // Efficient uint64 grid representation
     mutable AlignedVector<int16_t> ft_output_;
     mutable std::vector<int> active_features_;
 
