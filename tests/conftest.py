@@ -32,10 +32,9 @@ def small_grid_feature_set():
 
 
 @pytest.fixture
-def nnue_model(grid_feature_set):
+def nnue_model():
     """Return an NNUE model for testing."""
     return NNUE(
-        feature_set=grid_feature_set,
         max_epoch=10,
         num_batches_per_epoch=100,
         lr=1e-3,
@@ -44,10 +43,9 @@ def nnue_model(grid_feature_set):
 
 
 @pytest.fixture
-def small_nnue_model(small_grid_feature_set):
+def small_nnue_model():
     """Return a smaller NNUE model for faster testing."""
     return NNUE(
-        feature_set=small_grid_feature_set,
         max_epoch=10,
         num_batches_per_epoch=100,
         lr=1e-3,
@@ -62,8 +60,41 @@ def loss_params():
 
 
 @pytest.fixture
+def sample_image_batch(device):
+    """Return a sample batch of image data for NNUE model."""
+    batch_size = 4
+
+    # Generate random 96x96 RGB images
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    # Random targets and scores for loss computation
+    targets = torch.rand(batch_size, 1, device=device)  # Between 0 and 1
+    scores = torch.randn(batch_size, 1, device=device) * 100  # Search scores
+
+    # Random layer stack indices (bucket selection)
+    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=device)
+
+    return (images, targets, scores, layer_stack_indices)
+
+
+@pytest.fixture
+def small_image_batch(device):
+    """Return a smaller sample batch for faster testing."""
+    batch_size = 2
+
+    # Generate random 96x96 RGB images
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    targets = torch.rand(batch_size, 1, device=device)
+    scores = torch.randn(batch_size, 1, device=device) * 50
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+
+    return (images, targets, scores, layer_stack_indices)
+
+
+@pytest.fixture
 def sample_sparse_batch(grid_feature_set, device):
-    """Return a sample batch of sparse feature data."""
+    """Return a sample batch of sparse feature data for testing internal components."""
     batch_size = 4
     max_features = 32  # Maximum number of active features per sample
 
@@ -79,19 +110,12 @@ def sample_sparse_batch(grid_feature_set, device):
     # Feature values (typically 1.0 for active features)
     feature_values = torch.ones(batch_size, max_features, device=device)
 
-    # Random targets and scores for loss computation
-    targets = torch.rand(batch_size, 1, device=device)  # Between 0 and 1
-    scores = torch.randn(batch_size, 1, device=device) * 100  # Search scores
-
-    # Random layer stack indices (bucket selection)
-    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=device)
-
-    return (feature_indices, feature_values, targets, scores, layer_stack_indices)
+    return (feature_indices, feature_values)
 
 
 @pytest.fixture
 def small_sparse_batch(small_grid_feature_set, device):
-    """Return a smaller sample batch for faster testing."""
+    """Return a smaller sample batch for faster testing of internal components."""
     batch_size = 2
     max_features = 16
 
@@ -106,11 +130,8 @@ def small_sparse_batch(small_grid_feature_set, device):
     feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
 
     feature_values = torch.ones(batch_size, max_features, device=device)
-    targets = torch.rand(batch_size, 1, device=device)
-    scores = torch.randn(batch_size, 1, device=device) * 50
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
 
-    return (feature_indices, feature_values, targets, scores, layer_stack_indices)
+    return (feature_indices, feature_values)
 
 
 @pytest.fixture
@@ -121,28 +142,18 @@ def trained_nnue_model(small_nnue_model, device):
 
     # Create synthetic training data
     batch_size = 4
-    max_features = 16
 
     optimizer = torch.optim.Adam(small_nnue_model.parameters(), lr=1e-3)
 
     # Train for a few steps
     for step in range(3):
-        # Generate synthetic batch
-        feature_indices = torch.randint(
-            0,
-            small_nnue_model.feature_set.num_features,
-            (batch_size, max_features),
-            device=device,
-        )
-        mask = torch.rand(batch_size, max_features) < 0.8
-        feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
-
-        feature_values = torch.ones(batch_size, max_features, device=device)
+        # Generate synthetic image batch
+        images = torch.randn(batch_size, 3, 96, 96, device=device)
         targets = torch.rand(batch_size, 1, device=device)
         scores = torch.randn(batch_size, 1, device=device) * 50
         layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
 
-        batch = (feature_indices, feature_values, targets, scores, layer_stack_indices)
+        batch = (images, targets, scores, layer_stack_indices)
 
         # Training step
         loss = small_nnue_model.training_step(batch, step)
@@ -263,12 +274,19 @@ def assert_sparse_features_valid(feature_indices, feature_values, max_features):
 def assert_quantized_weights_valid(quantized_data):
     """Assert that quantized model data is valid for C++ export."""
     assert "feature_transformer" in quantized_data
+    assert "conv_layer" in quantized_data
     assert "metadata" in quantized_data
 
     ft_data = quantized_data["feature_transformer"]
     assert ft_data["weight"].dtype == torch.int16
     assert ft_data["bias"].dtype == torch.int32
     assert ft_data["scale"] > 0
+
+    # Check conv layer
+    conv_data = quantized_data["conv_layer"]
+    assert conv_data["weight"].dtype == torch.int8
+    assert conv_data["bias"].dtype == torch.int32
+    assert conv_data["scale"] > 0
 
     # Check layer stacks
     layer_stack_keys = [

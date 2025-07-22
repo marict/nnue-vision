@@ -214,18 +214,20 @@ class LayerStacks(nn.Module):
 
 class NNUE(pl.LightningModule):
     """
-    Grid-based NNUE model adapted from chess NNUE.
+    Visual Wake Words NNUE model.
+
+    Processes 96x96 RGB images through visual wake words model to 8x8x12 binary features,
+    then through NNUE architecture for final evaluation.
 
     Features:
-    - Single perspective (no white/black switching)
-    - NxN grid feature space
+    - Visual Wake Words frontend (Conv3x3, stride=12)
+    - 8x8x12 binary feature space (12 bitboards)
     - Quantization-ready architecture for C++ conversion
     - Bucketed layer stacks for efficiency
     """
 
     def __init__(
         self,
-        feature_set: Optional[GridFeatureSet] = None,
         max_epoch=800,
         num_batches_per_epoch=int(100_000_000 / 16384),
         gamma=0.992,
@@ -233,17 +235,28 @@ class NNUE(pl.LightningModule):
         param_index=0,
         num_ls_buckets=8,
         loss_params=LossParams(),
+        visual_threshold=0.0,
     ):
         super(NNUE, self).__init__()
 
-        if feature_set is None:
-            feature_set = GridFeatureSet()
+        # Visual processing layers - conv and tanh at the beginning
+        self.conv = nn.Conv2d(
+            in_channels=3,  # RGB input
+            out_channels=12,  # 12 bitboards
+            kernel_size=3,
+            stride=12,  # 96/12 = 8, so 96x96 -> 8x8
+            padding=1,  # Keep spatial dimensions
+            bias=True,
+        )
+        self.hardtanh = nn.Hardtanh(min_val=-1.0, max_val=1.0)
 
-        self.feature_set = feature_set
+        # Feature set is fixed for 8x8x12 visual features
+        self.feature_set = GridFeatureSet(grid_size=8, num_features_per_square=12)
         self.num_ls_buckets = num_ls_buckets
+        self.visual_threshold = visual_threshold
 
-        # Single feature transformer (no perspective switching)
-        self.input = FeatureTransformer(feature_set.num_features, L1)
+        # Single feature transformer
+        self.input = FeatureTransformer(self.feature_set.num_features, L1)
         self.layer_stacks = LayerStacks(self.num_ls_buckets)
 
         self.loss_params = loss_params
@@ -286,6 +299,11 @@ class NNUE(pl.LightningModule):
         self._init_layers()
 
     def _init_layers(self):
+        # Initialize conv layer weights
+        with torch.no_grad():
+            nn.init.normal_(self.conv.weight, mean=0.0, std=0.1)
+            nn.init.zeros_(self.conv.bias)
+
         # Initialize feature transformer weights
         with torch.no_grad():
             # Small random initialization for feature transformer
@@ -327,20 +345,146 @@ class NNUE(pl.LightningModule):
                             raise Exception("Not supported.")
                     p.data.copy_(p_data_fp32)
 
+    def _to_sparse_features(
+        self, binary_features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Convert dense binary features to sparse representation for NNUE.
+
+        During training, this maintains gradients by using the continuous binary_features values.
+        During inference, this uses hard thresholding.
+
+        Args:
+            binary_features: Binary tensor of shape (B, 12, 8, 8)
+
+        Returns:
+            Tuple of (feature_indices, feature_values) for NNUE input
+        """
+        batch_size, num_channels, height, width = binary_features.shape
+
+        if self.training:
+            # During training, use all positions but with continuous values
+            # This maintains gradients through the sparse representation
+
+            # Create all possible feature indices
+            all_indices = []
+            for c in range(num_channels):
+                for h in range(height):
+                    for w in range(width):
+                        linear_idx = c * (height * width) + h * width + w
+                        all_indices.append(linear_idx)
+
+            max_features = len(all_indices)
+            feature_indices = (
+                torch.tensor(all_indices, device=binary_features.device)
+                .unsqueeze(0)
+                .expand(batch_size, -1)
+            )
+
+            # Flatten binary features and use as values
+            binary_flat = binary_features.view(batch_size, -1)  # (B, 768)
+            feature_values = binary_flat
+
+            return feature_indices, feature_values
+
+        else:
+            # During inference, use sparse representation for efficiency
+            # Find active features (where value > 0.5)
+            active_mask = binary_features > 0.5
+
+            # Convert to feature indices
+            feature_indices_list = []
+            feature_values_list = []
+
+            for b in range(batch_size):
+                # Get active positions for this batch
+                active_positions = torch.nonzero(active_mask[b], as_tuple=False)
+
+                if len(active_positions) > 0:
+                    # Calculate linear indices
+                    channel_indices = active_positions[:, 0]  # channel
+                    row_indices = active_positions[:, 1]  # row
+                    col_indices = active_positions[:, 2]  # col
+
+                    linear_indices = (
+                        channel_indices * (height * width)
+                        + row_indices * width
+                        + col_indices
+                    )
+
+                    feature_indices_list.append(linear_indices)
+                    feature_values_list.append(
+                        torch.ones_like(linear_indices, dtype=torch.float32)
+                    )
+                else:
+                    # No active features
+                    feature_indices_list.append(
+                        torch.tensor(
+                            [], dtype=torch.long, device=binary_features.device
+                        )
+                    )
+                    feature_values_list.append(
+                        torch.tensor(
+                            [], dtype=torch.float32, device=binary_features.device
+                        )
+                    )
+
+            # Pad to same length for batching
+            max_features = max(len(indices) for indices in feature_indices_list)
+            if max_features == 0:
+                max_features = 1  # Avoid empty tensors
+
+            batch_feature_indices = torch.full(
+                (batch_size, max_features),
+                -1,
+                dtype=torch.long,
+                device=binary_features.device,
+            )
+            batch_feature_values = torch.zeros(
+                (batch_size, max_features),
+                dtype=torch.float32,
+                device=binary_features.device,
+            )
+
+            for b, (indices, values) in enumerate(
+                zip(feature_indices_list, feature_values_list)
+            ):
+                if len(indices) > 0:
+                    batch_feature_indices[b, : len(indices)] = indices
+                    batch_feature_values[b, : len(values)] = values
+
+            return batch_feature_indices, batch_feature_values
+
     def forward(
         self,
-        feature_indices: torch.Tensor,
-        feature_values: torch.Tensor,
+        images: torch.Tensor,
         layer_stack_indices: torch.Tensor,
     ):
         """
-        Forward pass for grid-based NNUE.
+        Forward pass from images to evaluation scores.
 
         Args:
-            feature_indices: [batch_size, max_features] - indices of active features
-            feature_values: [batch_size, max_features] - values of active features
+            images: RGB images of shape (B, 3, 96, 96)
             layer_stack_indices: [batch_size] - which bucket to use for each sample
         """
+        # Convolution: (B, 3, 96, 96) -> (B, 12, 8, 8)
+        x = self.conv(images)
+
+        # Apply Hardtanh activation
+        x = self.hardtanh(x)
+
+        # Apply threshold to get binary values
+        # During training, use differentiable approximation
+        if self.training:
+            # Smooth approximation using sigmoid with high temperature
+            binary_features = torch.sigmoid(10.0 * (x - self.visual_threshold))
+        else:
+            # Hard threshold for inference
+            binary_features = (x > self.visual_threshold).float()
+
+        # Convert to sparse features for NNUE
+        feature_indices, feature_values = self._to_sparse_features(binary_features)
+
         # Transform sparse features to dense representation
         features = self.input(feature_indices, feature_values)
 
@@ -369,17 +513,14 @@ class NNUE(pl.LightningModule):
         self._clip_weights()
 
         (
-            feature_indices,
-            feature_values,
-            targets,
-            scores,
-            layer_stack_indices,
+            images,  # RGB images (B, 3, 96, 96)
+            targets,  # Target labels
+            scores,  # Search scores
+            layer_stack_indices,  # Bucket indices
         ) = batch
 
         # Forward pass
-        scorenet = (
-            self(feature_indices, feature_values, layer_stack_indices) * self.nnue2score
-        )
+        scorenet = self(images, layer_stack_indices) * self.nnue2score
 
         p = self.loss_params
         # convert the network and search scores to an estimate match result
@@ -426,6 +567,8 @@ class NNUE(pl.LightningModule):
             import ranger21
 
             train_params = [
+                {"params": [self.conv.weight], "lr": LR},
+                {"params": [self.conv.bias], "lr": LR},
                 {"params": get_parameters([self.input]), "lr": LR, "gc_dim": 0},
                 {"params": [self.layer_stacks.l1_fact.weight], "lr": LR},
                 {"params": [self.layer_stacks.l1_fact.bias], "lr": LR},
@@ -509,6 +652,23 @@ class NNUE(pl.LightningModule):
                 "scales": {"l1": l1_scale, "l2": l2_scale, "output": out_scale},
             }
 
+        # Add conv layer weights
+        conv_weight = self.conv.weight.data  # (12, 3, 3, 3)
+        conv_bias = self.conv.bias.data  # (12,)
+
+        # Quantize conv weights (using 8-bit like hidden layers)
+        conv_scale = 64.0
+        conv_weight_q = (
+            torch.round(conv_weight * conv_scale).clamp_(-127, 127).to(torch.int8)
+        )
+        conv_bias_q = torch.round(conv_bias * conv_scale).to(torch.int32)
+
+        quantized_data["conv_layer"] = {
+            "weight": conv_weight_q,
+            "bias": conv_bias_q,
+            "scale": conv_scale,
+        }
+
         quantized_data["metadata"] = {
             "feature_set": self.feature_set,
             "L1": L1,
@@ -517,6 +677,7 @@ class NNUE(pl.LightningModule):
             "num_ls_buckets": self.num_ls_buckets,
             "nnue2score": self.nnue2score,
             "quantized_one": self.quantized_one,
+            "visual_threshold": self.visual_threshold,
         }
 
         return quantized_data
