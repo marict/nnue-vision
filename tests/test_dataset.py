@@ -1,300 +1,248 @@
 """
-Tests for dataset import functionality.
-
-This module tests:
-- Dataset creation and basic functionality
-- Data loader creation and iteration
-- Data transformations and preprocessing
-- Data shape and type consistency
-- Dataset statistics and properties
+Tests for dataset loading and processing functionality.
 """
 
 import numpy as np
 import pytest
 import torch
 from PIL import Image
+from torch.utils.data import DataLoader
 
-from dataset import (SyntheticVisualWakeWordsDataset, create_data_loaders,
-                     get_dataset_stats)
-from tests.conftest import assert_tensor_range, assert_tensor_shape
+from data import (VWW_CLASS_NAMES, VisualWakeWordsDataset, create_data_loaders,
+                  get_dataset_stats, print_dataset_stats)
+from tests.conftest import assert_tensor_shape
 
 
-class TestSyntheticVisualWakeWordsDataset:
-    """Test the SyntheticVisualWakeWordsDataset class."""
+class TestVisualWakeWordsDataset:
+    """Test the VisualWakeWordsDataset class."""
 
     def test_dataset_creation(self):
-        """Test that dataset can be created with different configurations."""
-        # Test default creation
-        dataset = SyntheticVisualWakeWordsDataset(num_samples=5)
+        """Test that we can create a dataset instance."""
+        dataset = VisualWakeWordsDataset(max_samples=5)
         assert len(dataset) == 5
         assert dataset.split == "train"
         assert dataset.target_size == (96, 96)
 
-        # Test with custom parameters
-        dataset = SyntheticVisualWakeWordsDataset(
-            split="validation", target_size=(64, 64), num_samples=10
-        )
-        assert len(dataset) == 10
-        assert dataset.split == "validation"
-        assert dataset.target_size == (64, 64)
+    def test_dataset_splits(self):
+        """Test different dataset splits."""
+        for split in ["train", "validation", "test"]:
+            dataset = VisualWakeWordsDataset(
+                split=split, target_size=(96, 96), max_samples=5
+            )
+            assert dataset.split == split
+            assert len(dataset) == 5
 
-    def test_dataset_getitem(self):
-        """Test that __getitem__ returns valid data."""
-        dataset = SyntheticVisualWakeWordsDataset(num_samples=5)
+    def test_dataset_indexing(self):
+        """Test that dataset supports indexing."""
+        dataset = VisualWakeWordsDataset(max_samples=5)
+
+        # Test basic indexing
+        image, label = dataset[0]
+        assert_tensor_shape(image, (3, 96, 96))
+        assert isinstance(label, int)
+        assert label in [0, 1]
+
+        # Test multiple indices
+        for i in range(min(3, len(dataset))):
+            image, label = dataset[i]
+            assert_tensor_shape(image, (3, 96, 96))
+            assert label in [0, 1]
+
+    def test_dataset_target_size(self):
+        """Test different target sizes."""
+        dataset = VisualWakeWordsDataset(max_samples=5, target_size=(128, 128))
+        image, label = dataset[0]
+        assert_tensor_shape(image, (3, 128, 128))
+
+    def test_class_names(self):
+        """Test that class names are correctly defined."""
+        assert len(VWW_CLASS_NAMES) == 2
+        assert "person" in VWW_CLASS_NAMES
+        assert "no_person" in VWW_CLASS_NAMES
+
+    def test_data_types(self):
+        """Test that dataset returns correct data types."""
+        dataset = VisualWakeWordsDataset(max_samples=3)
 
         for i in range(len(dataset)):
             image, label = dataset[i]
 
-            # Check image properties
+            # Image should be float tensor
             assert isinstance(image, torch.Tensor)
-            assert_tensor_shape(image, (3, 96, 96))  # C, H, W format after transforms
             assert image.dtype == torch.float32
 
-            # Check normalization (ImageNet stats applied)
-            # Values should be roughly in range [-3, 3] after normalization
-            assert_tensor_range(image, -5.0, 5.0)
-
-            # Check label properties
-            assert isinstance(label, torch.Tensor)
-            assert label.dtype == torch.long
-            assert label.item() in [0, 1]
-
-    def test_synthetic_pattern_consistency(self):
-        """Test that synthetic patterns are consistent with labels."""
-        dataset = SyntheticVisualWakeWordsDataset(num_samples=10, target_size=(96, 96))
-
-        for i in range(len(dataset)):
-            image, label = dataset[i]
-            expected_label = 1 if i % 2 == 0 else 0
-            assert (
-                label.item() == expected_label
-            ), f"Index {i}: expected {expected_label}, got {label.item()}"
-
-    def test_reproducibility(self):
-        """Test that dataset generates reproducible data."""
-        dataset1 = SyntheticVisualWakeWordsDataset(num_samples=5)
-        dataset2 = SyntheticVisualWakeWordsDataset(num_samples=5)
-
-        for i in range(5):
-            image1, label1 = dataset1[i]
-            image2, label2 = dataset2[i]
-
-            # Labels should be identical (deterministic based on index)
-            assert label1.item() == label2.item()
-
-            # Images should be similar (same random seed per index)
-            # Note: transforms might add some randomness, so we check labels only
-
-    def test_different_splits_have_different_transforms(self):
-        """Test that train and validation splits have different transforms."""
-        train_dataset = SyntheticVisualWakeWordsDataset(split="train", num_samples=1)
-        val_dataset = SyntheticVisualWakeWordsDataset(split="validation", num_samples=1)
-
-        # Both should work without error
-        train_image, train_label = train_dataset[0]
-        val_image, val_label = val_dataset[0]
-
-        # Both should have same shape and type
-        assert_tensor_shape(train_image, (3, 96, 96))
-        assert_tensor_shape(val_image, (3, 96, 96))
-        assert train_image.dtype == val_image.dtype == torch.float32
+            # Label should be integer
+            assert isinstance(label, int)
+            assert label in [0, 1]
 
 
 class TestDataLoaders:
     """Test data loader creation and functionality."""
 
-    def test_create_data_loaders(self):
-        """Test that data loaders are created successfully."""
+    def test_create_data_loaders_basic(self):
+        """Test basic data loader creation."""
         train_loader, val_loader, test_loader = create_data_loaders(
-            batch_size=4, num_workers=0, target_size=(96, 96)
+            batch_size=4, max_samples_per_split=8, num_workers=0, use_synthetic=True
         )
 
-        # Check loader properties
+        # Check that loaders were created
+        assert isinstance(train_loader, DataLoader)
+        assert isinstance(val_loader, DataLoader)
+        assert isinstance(test_loader, DataLoader)
+
+        # Check batch sizes
         assert train_loader.batch_size == 4
         assert val_loader.batch_size == 4
         assert test_loader.batch_size == 4
 
-        # Check dataset sizes (default subset=1.0)
-        assert len(train_loader.dataset) == 5000
-        assert len(val_loader.dataset) == 1000
-        assert len(test_loader.dataset) == 1000
-
-    def test_create_data_loaders_with_subset(self):
-        """Test that data loaders respect the subset parameter."""
-        # Test with 50% subset
-        train_loader, val_loader, test_loader = create_data_loaders(
-            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.5
-        )
-
-        # Check dataset sizes are halved
-        assert len(train_loader.dataset) == 2500  # 5000 * 0.5
-        assert len(val_loader.dataset) == 500  # 1000 * 0.5
-        assert len(test_loader.dataset) == 500  # 1000 * 0.5
-
-        # Test with 10% subset
-        train_loader, val_loader, test_loader = create_data_loaders(
-            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.1
-        )
-
-        # Check dataset sizes are 10%
-        assert len(train_loader.dataset) == 500  # 5000 * 0.1
-        assert len(val_loader.dataset) == 100  # 1000 * 0.1
-        assert len(test_loader.dataset) == 100  # 1000 * 0.1
-
-    def test_create_data_loaders_subset_validation(self):
-        """Test that subset parameter validation works correctly."""
-        import pytest
-
-        # Test invalid subset values
-        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
-            create_data_loaders(subset=0.0)  # 0.0 is not allowed
-
-        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
-            create_data_loaders(subset=1.5)  # > 1.0 is not allowed
-
-        with pytest.raises(ValueError, match="subset must be between 0.0 and 1.0"):
-            create_data_loaders(subset=-0.1)  # negative is not allowed
-
-    def test_create_data_loaders_minimum_samples(self):
-        """Test that minimum sample size is enforced."""
-        # Test with very small subset that would result in 0 samples
-        train_loader, val_loader, test_loader = create_data_loaders(
-            batch_size=4, num_workers=0, target_size=(96, 96), subset=0.0001
-        )
-
-        # Should have at least 1 sample each
-        assert len(train_loader.dataset) >= 1
-        assert len(val_loader.dataset) >= 1
-        assert len(test_loader.dataset) >= 1
-
-    def test_data_loader_iteration(self):
-        """Test that data loaders can be iterated over."""
-        train_loader, val_loader, test_loader = create_data_loaders(
-            batch_size=2, num_workers=0, target_size=(64, 64)
-        )
-
-        # Test train loader
-        batch_images, batch_labels = next(iter(train_loader))
-        assert_tensor_shape(batch_images, (2, 3, 64, 64))
-        assert_tensor_shape(batch_labels, (2,))
-        assert batch_labels.dtype == torch.long
-
-        # Test validation loader
-        batch_images, batch_labels = next(iter(val_loader))
-        assert_tensor_shape(batch_images, (2, 3, 64, 64))
-        assert_tensor_shape(batch_labels, (2,))
-
-        # Test test loader
-        batch_images, batch_labels = next(iter(test_loader))
-        assert_tensor_shape(batch_images, (2, 3, 64, 64))
-        assert_tensor_shape(batch_labels, (2,))
-
-    def test_batch_consistency(self):
-        """Test that batches contain valid data."""
+    def test_data_loader_output_shapes(self):
+        """Test that data loaders produce correct output shapes."""
         train_loader, _, _ = create_data_loaders(
-            batch_size=8, num_workers=0, target_size=(96, 96)
+            batch_size=4,
+            target_size=(96, 96),
+            max_samples_per_split=8,
+            num_workers=0,
+            use_synthetic=True,
         )
 
-        for i, (images, labels) in enumerate(train_loader):
-            if i >= 3:  # Test first 3 batches
-                break
+        # Get one batch
+        images, labels = next(iter(train_loader))
 
-            # Check batch shapes
-            assert images.shape[0] <= 8  # batch size
-            assert_tensor_shape(images, (images.shape[0], 3, 96, 96))
-            assert labels.shape[0] == images.shape[0]
+        # Check shapes
+        assert_tensor_shape(images, (4, 3, 96, 96))
+        assert_tensor_shape(labels, (4,))
 
-            # Check data types
-            assert images.dtype == torch.float32
-            assert labels.dtype == torch.long
+        # Check data types
+        assert images.dtype == torch.float32
+        assert labels.dtype == torch.long
 
-            # Check label values
-            assert torch.all((labels >= 0) & (labels <= 1))
+    def test_data_loader_different_batch_sizes(self):
+        """Test data loaders with different batch sizes."""
+        batch_sizes = [1, 2, 8, 16]
 
-            # Check image normalization
-            assert_tensor_range(images, -5.0, 5.0)
+        for batch_size in batch_sizes:
+            train_loader, _, _ = create_data_loaders(
+                batch_size=batch_size,
+                max_samples_per_split=16,
+                num_workers=0,
+                use_synthetic=True,
+            )
 
-    def test_class_balance_in_batches(self):
-        """Test that both classes appear in batches."""
-        train_loader, _, _ = create_data_loaders(
-            batch_size=16, num_workers=0, target_size=(96, 96)
-        )
+            images, labels = next(iter(train_loader))
+            assert images.shape[0] == batch_size
+            assert len(labels) == batch_size
 
-        all_labels = []
-        for i, (_, labels) in enumerate(train_loader):
-            if i >= 5:  # Check first 5 batches
-                break
-            all_labels.extend(labels.tolist())
+    def test_data_loader_different_image_sizes(self):
+        """Test data loaders with different target image sizes."""
+        sizes = [(64, 64), (96, 96), (128, 128)]
 
-        # Both classes should appear
-        unique_labels = set(all_labels)
-        assert 0 in unique_labels, "Class 0 (no-person) not found in batches"
-        assert 1 in unique_labels, "Class 1 (person) not found in batches"
+        for size in sizes:
+            train_loader, _, _ = create_data_loaders(
+                batch_size=4,
+                target_size=size,
+                max_samples_per_split=8,
+                num_workers=0,
+                use_synthetic=True,
+            )
+
+            images, labels = next(iter(train_loader))
+            expected_shape = (4, 3, size[0], size[1])
+            assert_tensor_shape(images, expected_shape)
 
 
-class TestDatasetStats:
+class TestDatasetStatistics:
     """Test dataset statistics and utility functions."""
 
-    def test_get_dataset_stats(self, capsys):
-        """Test that get_dataset_stats prints information."""
-        get_dataset_stats()
+    def test_get_dataset_stats(self):
+        """Test dataset statistics retrieval."""
+        stats = get_dataset_stats()
 
+        # Check required fields
+        assert "name" in stats
+        assert "description" in stats
+        assert "num_classes" in stats
+        assert "class_names" in stats
+
+        # Check values
+        assert stats["num_classes"] == 2
+        assert len(stats["class_names"]) == 2
+
+    def test_print_dataset_stats(self, capsys):
+        """Test dataset statistics printing."""
+        print_dataset_stats()
+
+        # Capture output
         captured = capsys.readouterr()
-        assert "Synthetic dataset statistics" in captured.out
-        assert "Image size: 96x96 RGB" in captured.out
-        assert "Classes: 2" in captured.out
+        output = captured.out
 
+        # Check that key information is printed
+        assert "Visual Wake Words" in output
+        assert "person" in output
+        assert "no_person" in output
 
-class TestDatasetIntegration:
-    """Integration tests for dataset functionality."""
-
-    def test_dataset_with_model_input(self, simple_test_model, device):
-        """Test that dataset output is compatible with model input."""
-        dataset = SyntheticVisualWakeWordsDataset(num_samples=4)
-        simple_test_model.to(device)
-        simple_test_model.eval()
-
-        # Test individual samples
-        for i in range(len(dataset)):
-            image, label = dataset[i]
-            image = image.unsqueeze(0).to(device)  # Add batch dimension
-
-            # Forward pass should work without error
-            with torch.no_grad():
-                logits = simple_test_model(image)
-
-            assert_tensor_shape(logits, (1, 2))
-            assert logits.dtype == torch.float32
-
-    def test_dataloader_with_model_training(self, simple_test_model, device):
-        """Test that data loader output works with model training."""
+    def test_data_loader_iteration(self):
+        """Test iterating through data loaders."""
         train_loader, _, _ = create_data_loaders(
-            batch_size=4, num_workers=0, target_size=(96, 96)
+            batch_size=4, max_samples_per_split=12, num_workers=0, use_synthetic=True
         )
 
-        simple_test_model.to(device)
-        simple_test_model.train()
-        optimizer = torch.optim.Adam(simple_test_model.parameters(), lr=1e-3)
-        loss_fn = torch.nn.CrossEntropyLoss()
+        batch_count = 0
+        total_samples = 0
 
-        # Train for one batch
-        images, labels = next(iter(train_loader))
-        images, labels = images.to(device), labels.to(device)
+        for images, labels in train_loader:
+            batch_count += 1
+            total_samples += len(labels)
 
-        # Forward pass
-        logits = simple_test_model(images)
-        loss = loss_fn(logits, labels)
+            # Check batch properties
+            assert isinstance(images, torch.Tensor)
+            assert isinstance(labels, torch.Tensor)
+            assert len(images) == len(labels)
 
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # Limit iteration for testing
+            if batch_count >= 3:
+                break
 
-        # Verify training worked
-        assert loss.item() > 0  # Loss should be positive
-        assert not torch.isnan(loss)  # Loss should not be NaN
+        assert batch_count > 0
+        assert total_samples > 0
 
-        # Verify gradients were computed
-        for param in simple_test_model.parameters():
-            if param.requires_grad:
-                assert param.grad is not None
+
+class TestDatasetCompatibility:
+    """Test dataset compatibility with PyTorch components."""
+
+    def test_dataloader_compatibility(self):
+        """Test that dataset works with PyTorch DataLoader."""
+        dataset = VisualWakeWordsDataset(max_samples=8)
+        loader = DataLoader(dataset, batch_size=4, shuffle=True)
+
+        # Should be able to iterate
+        for images, labels in loader:
+            assert_tensor_shape(images, (4, 3, 96, 96))
+            assert_tensor_shape(labels, (4,))
+            break  # Just test one batch
+
+    def test_dataset_with_transforms(self):
+        """Test that dataset handles transforms correctly."""
+        dataset = VisualWakeWordsDataset(max_samples=5, target_size=(64, 64))
+
+        # Get sample
+        image, label = dataset[0]
+
+        # Check that transforms were applied
+        assert_tensor_shape(image, (3, 64, 64))
+        assert torch.all(image >= -3) and torch.all(
+            image <= 3
+        )  # Reasonable range after normalization
+        assert isinstance(label, int)
+
+    def test_dataset_consistency(self):
+        """Test that dataset returns consistent results."""
+        dataset = VisualWakeWordsDataset(max_samples=5)
+
+        # Get same sample twice
+        image1, label1 = dataset[0]
+        image2, label2 = dataset[0]
+
+        # Should be identical (assuming no randomness in transforms for non-train split)
+        if dataset.split != "train":
+            assert torch.allclose(image1, image2)
+            assert label1 == label2

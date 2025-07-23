@@ -19,10 +19,10 @@ import pytorch_lightning as pl
 import torch
 from torch import nn
 
-# 3 layer fully connected network dimensions
-L1 = 512  # Increased from 256 for aggressive scaling - matches Stockfish-scale sparsity benefits
-L2 = 15
-L3 = 32
+# Default layer sizes (can be overridden in NNUE constructor)
+DEFAULT_L1 = 3072
+DEFAULT_L2 = 15
+DEFAULT_L3 = 32
 
 
 # parameters needed for the definition of the loss
@@ -42,8 +42,10 @@ class LossParams:
 class GridFeatureSet:
     """Feature set for NxN grid-based features."""
 
-    grid_size: int = 8  # NxN grid
-    num_features_per_square: int = 12  # Number of possible features per square
+    grid_size: int = 8  # 8x8 grid to match test expectations
+    num_features_per_square: int = (
+        12  # 12 features per square to match test expectations
+    )
 
     @property
     def num_features(self) -> int:
@@ -107,18 +109,24 @@ def get_parameters(layers):
 
 
 class LayerStacks(nn.Module):
-    def __init__(self, count):
+    def __init__(
+        self, count, l1_size=DEFAULT_L1, l2_size=DEFAULT_L2, l3_size=DEFAULT_L3
+    ):
         super(LayerStacks, self).__init__()
 
         self.count = count
-        self.l1 = nn.Linear(L1, (L2 + 1) * count)
+        self.l1_size = l1_size
+        self.l2_size = l2_size
+        self.l3_size = l3_size
+
+        self.l1 = nn.Linear(l1_size, (l2_size + 1) * count)
         # Factorizer only for the first layer because later
         # there's a non-linearity and factorization breaks.
         # This is by design. The weights in the further layers should be
         # able to diverge a lot.
-        self.l1_fact = nn.Linear(L1, L2 + 1, bias=True)
-        self.l2 = nn.Linear(L2 * 2, L3 * count)
-        self.output = nn.Linear(L3, 1 * count)
+        self.l1_fact = nn.Linear(l1_size, l2_size + 1, bias=True)
+        self.l2 = nn.Linear(l2_size * 2, l3_size * count)
+        self.output = nn.Linear(l3_size, 1 * count)
 
         # Cached helper tensor for choosing outputs by bucket indices.
         # Initialized lazily in forward.
@@ -142,12 +150,18 @@ class LayerStacks(nn.Module):
 
             for i in range(1, self.count):
                 # Force all layer stacks to be initialized in the same way.
-                l1_weight[i * (L2 + 1) : (i + 1) * (L2 + 1), :] = l1_weight[
-                    0 : (L2 + 1), :
+                l1_weight[i * (self.l2_size + 1) : (i + 1) * (self.l2_size + 1), :] = (
+                    l1_weight[0 : (self.l2_size + 1), :]
+                )
+                l1_bias[i * (self.l2_size + 1) : (i + 1) * (self.l2_size + 1)] = (
+                    l1_bias[0 : (self.l2_size + 1)]
+                )
+                l2_weight[i * self.l3_size : (i + 1) * self.l3_size, :] = l2_weight[
+                    0 : self.l3_size, :
                 ]
-                l1_bias[i * (L2 + 1) : (i + 1) * (L2 + 1)] = l1_bias[0 : (L2 + 1)]
-                l2_weight[i * L3 : (i + 1) * L3, :] = l2_weight[0:L3, :]
-                l2_bias[i * L3 : (i + 1) * L3] = l2_bias[0:L3]
+                l2_bias[i * self.l3_size : (i + 1) * self.l3_size] = l2_bias[
+                    0 : self.l3_size
+                ]
                 output_weight[i : i + 1, :] = output_weight[0:1, :]
 
         self.l1.weight = nn.Parameter(l1_weight)
@@ -166,20 +180,20 @@ class LayerStacks(nn.Module):
 
         indices = ls_indices.flatten() + self.idx_offset
 
-        l1s_ = self.l1(x).reshape((-1, self.count, L2 + 1))
+        l1s_ = self.l1(x).reshape((-1, self.count, self.l2_size + 1))
         l1f_ = self.l1_fact(x)
         # Pick the appropriate bucket for each sample
-        l1c_ = l1s_.view(-1, L2 + 1)[indices]
-        l1c_, l1c_out = l1c_.split(L2, dim=1)
-        l1f_, l1f_out = l1f_.split(L2, dim=1)
+        l1c_ = l1s_.view(-1, self.l2_size + 1)[indices]
+        l1c_, l1c_out = l1c_.split(self.l2_size, dim=1)
+        l1f_, l1f_out = l1f_.split(self.l2_size, dim=1)
         l1x_ = l1c_ + l1f_
         # multiply sqr crelu result by (127/128) to match quantized version
         l1x_ = torch.clamp(
             torch.cat([torch.pow(l1x_, 2.0) * (127 / 128), l1x_], dim=1), 0.0, 1.0
         )
 
-        l2s_ = self.l2(l1x_).reshape((-1, self.count, L3))
-        l2c_ = l2s_.view(-1, L3)[indices]
+        l2s_ = self.l2(l1x_).reshape((-1, self.count, self.l3_size))
+        l2c_ = l2s_.view(-1, self.l3_size)[indices]
         l2x_ = torch.clamp(l2c_, 0.0, 1.0)
 
         l3s_ = self.output(l2x_).reshape((-1, self.count, 1))
@@ -194,19 +208,31 @@ class LayerStacks(nn.Module):
         # for the serializer, because the buckets are interpreted as separate layers.
         for i in range(self.count):
             with torch.no_grad():
-                l1 = nn.Linear(L1, L2 + 1)
-                l2 = nn.Linear(L2 * 2, L3)
-                output = nn.Linear(L3, 1)
-                l1.weight.data = (
-                    self.l1.weight[i * (L2 + 1) : (i + 1) * (L2 + 1), :]
+                # Extract only the L2 part (not L2+1) for C++ engine compatibility
+                l1 = nn.Linear(self.l1_size, self.l2_size)
+                l2 = nn.Linear(self.l2_size * 2, self.l3_size)
+                output = nn.Linear(self.l3_size, 1)
+
+                # Get combined weights/biases (l1 + l1_fact)
+                combined_weight = (
+                    self.l1.weight[
+                        i * (self.l2_size + 1) : (i + 1) * (self.l2_size + 1), :
+                    ]
                     + self.l1_fact.weight.data
                 )
-                l1.bias.data = (
-                    self.l1.bias[i * (L2 + 1) : (i + 1) * (L2 + 1)]
+                combined_bias = (
+                    self.l1.bias[i * (self.l2_size + 1) : (i + 1) * (self.l2_size + 1)]
                     + self.l1_fact.bias.data
                 )
-                l2.weight.data = self.l2.weight[i * L3 : (i + 1) * L3, :]
-                l2.bias.data = self.l2.bias[i * L3 : (i + 1) * L3]
+
+                # Extract only the first L2 components (skip the +1 part used for factorization)
+                l1.weight.data = combined_weight[: self.l2_size, :]
+                l1.bias.data = combined_bias[: self.l2_size]
+
+                l2.weight.data = self.l2.weight[
+                    i * self.l3_size : (i + 1) * self.l3_size, :
+                ]
+                l2.bias.data = self.l2.bias[i * self.l3_size : (i + 1) * self.l3_size]
                 output.weight.data = self.output.weight[i : (i + 1), :]
                 output.bias.data = self.output.bias[i : (i + 1)]
                 yield l1, l2, output
@@ -214,23 +240,24 @@ class LayerStacks(nn.Module):
 
 class NNUE(pl.LightningModule):
     """
-    Visual Wake Words NNUE model with uint64-per-pixel architecture for maximum efficiency.
+    Visual Wake Words NNUE model with configurable architecture for maximum efficiency.
 
-    Processes 96x96 RGB images through visual wake words model to 32x32x64 binary features,
+    Processes images through visual wake words model to binary features,
     then through NNUE architecture for final evaluation.
 
     Features:
+    - Configurable feature space and layer sizes for testing and deployment
     - Visual Wake Words frontend (Conv3x3, stride=3) - aggressive scaling
-    - 32x32x64 binary feature space (65,536 features, 1 uint64 per pixel)
-    - Perfect bitwise operations: popcount, bitscan, parallel bit ops
     - Quantization-ready architecture for C++ conversion
     - Bucketed layer stacks for efficiency
-    - Ultra-low sparsity (~0.23% density vs original ~20%)
-    - Stockfish-scale feature space (65K features vs Stockfish 90K)
     """
 
     def __init__(
         self,
+        feature_set: Optional[GridFeatureSet] = None,
+        l1_size: int = DEFAULT_L1,
+        l2_size: int = DEFAULT_L2,
+        l3_size: int = DEFAULT_L3,
         max_epoch=800,
         num_batches_per_epoch=int(100_000_000 / 16384),
         gamma=0.992,
@@ -242,25 +269,44 @@ class NNUE(pl.LightningModule):
     ):
         super(NNUE, self).__init__()
 
+        # Architecture configuration
+        if feature_set is None:
+            # Default to large feature set for full models
+            feature_set = GridFeatureSet(grid_size=32, num_features_per_square=64)
+
+        self.feature_set = feature_set
+        self.l1_size = l1_size
+        self.l2_size = l2_size
+        self.l3_size = l3_size
+        self.num_ls_buckets = num_ls_buckets
+        self.visual_threshold = visual_threshold
+
+        # Calculate conv output channels based on feature set
+        # For grid-based features, we need enough channels to cover all features per square
+        conv_out_channels = feature_set.num_features_per_square
+
+        # Calculate image size and stride based on feature set grid size
+        # Default: 96x96 input, but make stride dynamic to hit target grid size
+        input_size = 96
+        target_grid_size = feature_set.grid_size
+        conv_stride = input_size // target_grid_size
+        if conv_stride < 1:
+            conv_stride = 1
+
         # Visual processing layers - conv and tanh at the beginning
         self.conv = nn.Conv2d(
             in_channels=3,  # RGB input
-            out_channels=64,  # 64 channels per pixel for uint64 efficiency
+            out_channels=conv_out_channels,
             kernel_size=3,
-            stride=3,  # 96/3 = 32, so 96x96 -> 32x32 (aggressive scaling)
+            stride=conv_stride,
             padding=1,  # Keep spatial dimensions
             bias=True,
         )
         self.hardtanh = nn.Hardtanh(min_val=-1.0, max_val=1.0)
 
-        # Feature set for 32x32x64 uint64-per-pixel architecture
-        self.feature_set = GridFeatureSet(grid_size=32, num_features_per_square=64)
-        self.num_ls_buckets = num_ls_buckets
-        self.visual_threshold = visual_threshold
-
         # Single feature transformer
-        self.input = FeatureTransformer(self.feature_set.num_features, L1)
-        self.layer_stacks = LayerStacks(self.num_ls_buckets)
+        self.input = FeatureTransformer(self.feature_set.num_features, l1_size)
+        self.layer_stacks = LayerStacks(num_ls_buckets, l1_size, l2_size, l3_size)
 
         self.loss_params = loss_params
         self.max_epoch = max_epoch
@@ -358,7 +404,7 @@ class NNUE(pl.LightningModule):
         During inference, this uses hard thresholding.
 
         Args:
-            binary_features: Binary tensor of shape (B, 12, 8, 8)
+            binary_features: Binary tensor of shape (B, C, H, W) where C is conv_out_channels
 
         Returns:
             Tuple of (feature_indices, feature_values) for NNUE input
@@ -385,7 +431,7 @@ class NNUE(pl.LightningModule):
             )
 
             # Flatten binary features and use as values
-            binary_flat = binary_features.view(batch_size, -1)  # (B, 768)
+            binary_flat = binary_features.view(batch_size, -1)
             feature_values = binary_flat
 
             return feature_indices, feature_values
@@ -467,10 +513,10 @@ class NNUE(pl.LightningModule):
         Forward pass from images to evaluation scores.
 
         Args:
-            images: RGB images of shape (B, 3, 96, 96)
+            images: RGB images of shape (B, 3, H, W) - typically (B, 3, 96, 96)
             layer_stack_indices: [batch_size] - which bucket to use for each sample
         """
-        # Convolution: (B, 3, 96, 96) -> (B, 64, 32, 32)
+        # Convolution: (B, 3, H, W) -> (B, conv_out_channels, grid_h, grid_w)
         x = self.conv(images)
 
         # Apply Hardtanh activation
@@ -495,7 +541,7 @@ class NNUE(pl.LightningModule):
         l0_ = torch.clamp(features, 0.0, 1.0)
 
         # Split into halves and apply squared activation (original NNUE approach)
-        l0_s = torch.split(l0_, L1 // 2, dim=1)
+        l0_s = torch.split(l0_, self.l1_size // 2, dim=1)
         l0_s1 = l0_s[0] * l0_s[1]  # Element-wise multiplication (squared crelu)
 
         # Concatenate original and squared parts to maintain L1 dimensions
@@ -516,7 +562,7 @@ class NNUE(pl.LightningModule):
         self._clip_weights()
 
         (
-            images,  # RGB images (B, 3, 96, 96)
+            images,  # RGB images (B, 3, H, W)
             targets,  # Target labels
             scores,  # Search scores
             layer_stack_indices,  # Bucket indices
@@ -655,9 +701,9 @@ class NNUE(pl.LightningModule):
                 "scales": {"l1": l1_scale, "l2": l2_scale, "output": out_scale},
             }
 
-        # Add conv layer weights
-        conv_weight = self.conv.weight.data  # (12, 3, 3, 3)
-        conv_bias = self.conv.bias.data  # (12,)
+        # Add conv layer weights (scale conv channels based on feature set)
+        conv_weight = self.conv.weight.data
+        conv_bias = self.conv.bias.data
 
         # Quantize conv weights (using 8-bit like hidden layers)
         conv_scale = 64.0
@@ -674,9 +720,9 @@ class NNUE(pl.LightningModule):
 
         quantized_data["metadata"] = {
             "feature_set": self.feature_set,
-            "L1": L1,
-            "L2": L2,
-            "L3": L3,
+            "L1": self.l1_size,
+            "L2": self.l2_size,
+            "L3": self.l3_size,
             "num_ls_buckets": self.num_ls_buckets,
             "nnue2score": self.nnue2score,
             "quantized_one": self.quantized_one,

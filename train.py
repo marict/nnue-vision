@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import (EarlyStopping, ModelCheckpoint,
 from pytorch_lightning.loggers import WandbLogger
 
 from config import ConfigError, load_config
-from dataset import create_data_loaders
+from data import create_data_loaders
 from model import NNUE, LossParams
 
 

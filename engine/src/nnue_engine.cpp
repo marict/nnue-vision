@@ -1,33 +1,36 @@
 #include "../include/nnue_engine.h"
 #include <iostream>
 #include <cstring>
-#include <algorithm>
 #include <cmath>
+#include <algorithm>
 
 namespace nnue {
 
 // ConvLayer implementation
-ConvLayer::ConvLayer() : scale(1.0f) {}
+ConvLayer::ConvLayer() : scale(64.0f), out_channels(0), in_channels(0), kernel_h(0), kernel_w(0) {}
 
 bool ConvLayer::load_from_stream(std::ifstream& file) {
     // Read scale
     file.read(reinterpret_cast<char*>(&scale), sizeof(float));
     
-    // Read weight dimensions
-    uint32_t out_channels, in_channels, kernel_h, kernel_w;
+    // Read dimensions
     file.read(reinterpret_cast<char*>(&out_channels), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&in_channels), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&kernel_h), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&kernel_w), sizeof(uint32_t));
     
-    if (out_channels != OUTPUT_CHANNELS || in_channels != INPUT_CHANNELS ||
-        kernel_h != CONV_KERNEL_SIZE || kernel_w != CONV_KERNEL_SIZE) {
-        std::cerr << "Invalid conv layer dimensions" << std::endl;
+    if (in_channels != 3) {
+        std::cerr << "Invalid conv input channels: " << in_channels << " (expected 3)" << std::endl;
+        return false;
+    }
+    
+    if (kernel_h != 3 || kernel_w != 3) {
+        std::cerr << "Invalid conv kernel size: " << kernel_h << "x" << kernel_w << " (expected 3x3)" << std::endl;
         return false;
     }
     
     // Read weights
-    size_t weight_count = out_channels * in_channels * kernel_h * kernel_w;
+    int weight_count = out_channels * in_channels * kernel_h * kernel_w;
     weights.resize(weight_count);
     file.read(reinterpret_cast<char*>(weights.data()), weight_count);
     
@@ -35,7 +38,7 @@ bool ConvLayer::load_from_stream(std::ifstream& file) {
     uint32_t bias_count;
     file.read(reinterpret_cast<char*>(&bias_count), sizeof(uint32_t));
     if (bias_count != out_channels) {
-        std::cerr << "Invalid bias count" << std::endl;
+        std::cerr << "Conv bias count mismatch" << std::endl;
         return false;
     }
     
@@ -45,45 +48,56 @@ bool ConvLayer::load_from_stream(std::ifstream& file) {
     return file.good();
 }
 
-void ConvLayer::forward(const float* input, int8_t* output) const {
-    // Use SIMD optimized version if available
-    #ifdef __AVX2__
-        if (simd::has_avx2()) {
-            simd::conv2d_unrolled_avx2(input, weights.data(), biases.data(), output, scale);
-            return;
-        }
-    #endif
+void ConvLayer::forward(const float* input, int8_t* output, int input_h, int input_w, int stride) const {
+    // Calculate output dimensions
+    int output_h = (input_h + 2 - kernel_h) / stride + 1;  // With padding=1
+    int output_w = (input_w + 2 - kernel_w) / stride + 1;
     
-    #ifdef __ARM_NEON__
-        if (simd::has_neon()) {
-            simd::conv2d_unrolled_neon(input, weights.data(), biases.data(), output, scale);
-            return;
+    // Unrolled convolution for efficiency
+    for (int out_c = 0; out_c < out_channels; ++out_c) {
+        for (int out_h = 0; out_h < output_h; ++out_h) {
+            for (int out_w = 0; out_w < output_w; ++out_w) {
+                int32_t acc = biases[out_c];
+                
+                // Convolution with padding
+                for (int kh = 0; kh < kernel_h; ++kh) {
+                    for (int kw = 0; kw < kernel_w; ++kw) {
+                        int in_h = out_h * stride + kh - 1;  // padding=1
+                        int in_w = out_w * stride + kw - 1;
+                        
+                        if (in_h >= 0 && in_h < input_h && in_w >= 0 && in_w < input_w) {
+                            for (int in_c = 0; in_c < in_channels; ++in_c) {
+                                int input_idx = (in_h * input_w + in_w) * in_channels + in_c;
+                                int weight_idx = ((out_c * kernel_h + kh) * kernel_w + kw) * in_channels + in_c;
+                                
+                                acc += static_cast<int32_t>(input[input_idx] * scale) * weights[weight_idx];
+                            }
+                        }
+                    }
+                }
+                
+                // Apply activation and quantize
+                int8_t result = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(scale))));
+                int output_idx = (out_h * output_w + out_w) * out_channels + out_c;
+                output[output_idx] = result;
+            }
         }
-    #endif
-    
-    // Fallback to scalar implementation
-    simd::conv2d_unrolled_scalar(input, weights.data(), biases.data(), output, scale);
+    }
 }
 
 // FeatureTransformer implementation
-FeatureTransformer::FeatureTransformer() : scale(FT_SCALE) {}
+FeatureTransformer::FeatureTransformer() : scale(64.0f), num_features(0), output_size(0) {}
 
 bool FeatureTransformer::load_from_stream(std::ifstream& file) {
     // Read scale
     file.read(reinterpret_cast<char*>(&scale), sizeof(float));
     
-    // Read weight dimensions
-    uint32_t num_features, output_size;
+    // Read dimensions
     file.read(reinterpret_cast<char*>(&num_features), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&output_size), sizeof(uint32_t));
     
-    if (num_features != GRID_FEATURES || output_size != L1_SIZE) {
-        std::cerr << "Invalid feature transformer dimensions" << std::endl;
-        return false;
-    }
-    
     // Read weights
-    size_t weight_count = num_features * output_size;
+    int weight_count = num_features * output_size;
     weights.resize(weight_count);
     file.read(reinterpret_cast<char*>(weights.data()), weight_count * sizeof(int16_t));
     
@@ -91,7 +105,7 @@ bool FeatureTransformer::load_from_stream(std::ifstream& file) {
     uint32_t bias_count;
     file.read(reinterpret_cast<char*>(&bias_count), sizeof(uint32_t));
     if (bias_count != output_size) {
-        std::cerr << "Invalid bias count" << std::endl;
+        std::cerr << "FT bias count mismatch" << std::endl;
         return false;
     }
     
@@ -102,47 +116,48 @@ bool FeatureTransformer::load_from_stream(std::ifstream& file) {
 }
 
 void FeatureTransformer::forward(const std::vector<int>& active_features, int16_t* output) const {
-    // Use SIMD optimized version if available
-    #ifdef __AVX2__
-        if (simd::has_avx2()) {
-            simd::ft_forward_avx2(active_features, weights.data(), biases.data(), output, scale);
-            return;
-        }
-    #endif
+    // Initialize with bias
+    for (int i = 0; i < output_size; ++i) {
+        output[i] = static_cast<int16_t>(biases[i]);
+    }
     
-    #ifdef __ARM_NEON__
-        if (simd::has_neon()) {
-            simd::ft_forward_neon(active_features, weights.data(), biases.data(), output, scale);
-            return;
+    // Accumulate active features
+    for (int feature_idx : active_features) {
+        if (feature_idx >= 0 && feature_idx < num_features) {
+            for (int i = 0; i < output_size; ++i) {
+                int weight_idx = feature_idx * output_size + i;
+                output[i] += weights[weight_idx];
+            }
         }
-    #endif
-    
-    // Fallback to scalar implementation
-    simd::ft_forward_scalar(active_features, weights.data(), biases.data(), output, scale);
+    }
 }
 
 void FeatureTransformer::update_accumulator(const std::vector<int>& added_features,
                                            const std::vector<int>& removed_features,
                                            int16_t* accumulator) const {
-    // Remove features
-    for (int feature_idx : removed_features) {
-        const int16_t* feature_weights = weights.data() + feature_idx * L1_SIZE;
-        for (int i = 0; i < L1_SIZE; ++i) {
-            accumulator[i] -= feature_weights[i];
+    // Add new features
+    for (int feature_idx : added_features) {
+        if (feature_idx >= 0 && feature_idx < num_features) {
+            for (int i = 0; i < output_size; ++i) {
+                int weight_idx = feature_idx * output_size + i;
+                accumulator[i] += weights[weight_idx];
+            }
         }
     }
     
-    // Add features
-    for (int feature_idx : added_features) {
-        const int16_t* feature_weights = weights.data() + feature_idx * L1_SIZE;
-        for (int i = 0; i < L1_SIZE; ++i) {
-            accumulator[i] += feature_weights[i];
+    // Remove old features
+    for (int feature_idx : removed_features) {
+        if (feature_idx >= 0 && feature_idx < num_features) {
+            for (int i = 0; i < output_size; ++i) {
+                int weight_idx = feature_idx * output_size + i;
+                accumulator[i] -= weights[weight_idx];
+            }
         }
     }
 }
 
 // LayerStack implementation
-LayerStack::LayerStack() : l1_scale(HIDDEN_SCALE), l2_scale(HIDDEN_SCALE), output_scale(OUTPUT_SCALE) {}
+LayerStack::LayerStack() : l1_size(0), l2_size(0), l3_size(0), l1_scale(64.0f), l2_scale(64.0f), output_scale(16.0f) {}
 
 bool LayerStack::load_from_stream(std::ifstream& file) {
     // Read scales
@@ -155,10 +170,8 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&l1_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l1_in_size), sizeof(uint32_t));
     
-    if (l1_in_size != L1_SIZE || l1_out_size != L2_SIZE) {
-        std::cerr << "Invalid L1 layer dimensions" << std::endl;
-        return false;
-    }
+    l1_size = l1_in_size;
+    l2_size = l1_out_size;
     
     l1_weights.resize(l1_out_size * l1_in_size);
     file.read(reinterpret_cast<char*>(l1_weights.data()), l1_weights.size());
@@ -173,10 +186,12 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&l2_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l2_in_size), sizeof(uint32_t));
     
-    if (l2_in_size != L2_SIZE || l2_out_size != L3_SIZE) {
-        std::cerr << "Invalid L2 layer dimensions" << std::endl;
+    if (l2_in_size != l2_size * 2) {
+        std::cerr << "Invalid L2 input size: " << l2_in_size << " (expected " << l2_size * 2 << ")" << std::endl;
         return false;
     }
+    
+    l3_size = l2_out_size;
     
     l2_weights.resize(l2_out_size * l2_in_size);
     file.read(reinterpret_cast<char*>(l2_weights.data()), l2_weights.size());
@@ -191,8 +206,8 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&out_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&out_in_size), sizeof(uint32_t));
     
-    if (out_in_size != L3_SIZE || out_out_size != 1) {
-        std::cerr << "Invalid output layer dimensions" << std::endl;
+    if (out_in_size != l3_size || out_out_size != 1) {
+        std::cerr << "Invalid output layer dimensions: " << out_in_size << " -> " << out_out_size << std::endl;
         return false;
     }
     
@@ -208,50 +223,62 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
 }
 
 float LayerStack::forward(const int16_t* input) const {
-    // L1: 3072 -> 15 with ClippedReLU
-    int8_t l1_output[L2_SIZE];
+    // L1: l1_size -> l2_size with ClippedReLU
+    std::vector<int8_t> l1_output(l2_size);
     #ifdef __AVX2__
         if (simd::has_avx2()) {
             simd::dense_forward_avx2(input, l1_weights.data(), l1_biases.data(), 
-                                   l1_output, L1_SIZE, L2_SIZE, l1_scale);
+                                   l1_output.data(), l1_size, l2_size, l1_scale);
         } else
     #endif
     #ifdef __ARM_NEON__
         if (simd::has_neon()) {
             simd::dense_forward_neon(input, l1_weights.data(), l1_biases.data(),
-                                   l1_output, L1_SIZE, L2_SIZE, l1_scale);
+                                   l1_output.data(), l1_size, l2_size, l1_scale);
         } else
     #endif
         {
             simd::dense_forward_scalar(input, l1_weights.data(), l1_biases.data(),
-                                     l1_output, L1_SIZE, L2_SIZE, l1_scale);
+                                     l1_output.data(), l1_size, l2_size, l1_scale);
         }
     
-    // L2: 15 -> 32 with ClippedReLU
-    int8_t l2_output[L3_SIZE];
+    // Apply squared concatenation: [squared(l1), original(l1)] to match Python model
+    std::vector<int8_t> l1_expanded(l2_size * 2);
+    for (int i = 0; i < l2_size; ++i) {
+        // Squared part (first half) - multiply by (127/128) to match Python quantization
+        int32_t squared = static_cast<int32_t>(l1_output[i]) * static_cast<int32_t>(l1_output[i]);
+        squared = (squared * 127) / 128;  // Apply (127/128) factor
+        l1_expanded[i] = static_cast<int8_t>(std::max(0, std::min(127, squared)));
+        
+        // Original part (second half)
+        l1_expanded[i + l2_size] = l1_output[i];
+    }
+    
+    // L2: (l2_size * 2) -> l3_size with ClippedReLU
+    std::vector<int8_t> l2_output(l3_size);
     #ifdef __AVX2__
         if (simd::has_avx2()) {
-            simd::dense_forward_avx2(reinterpret_cast<const int16_t*>(l1_output), 
+            simd::dense_forward_avx2(reinterpret_cast<const int16_t*>(l1_expanded.data()), 
                                    l2_weights.data(), l2_biases.data(),
-                                   l2_output, L2_SIZE, L3_SIZE, l2_scale);
+                                   l2_output.data(), l2_size * 2, l3_size, l2_scale);
         } else
     #endif
     #ifdef __ARM_NEON__
         if (simd::has_neon()) {
-            simd::dense_forward_neon(reinterpret_cast<const int16_t*>(l1_output),
+            simd::dense_forward_neon(reinterpret_cast<const int16_t*>(l1_expanded.data()),
                                    l2_weights.data(), l2_biases.data(),
-                                   l2_output, L2_SIZE, L3_SIZE, l2_scale);
+                                   l2_output.data(), l2_size * 2, l3_size, l2_scale);
         } else
     #endif
         {
-            simd::dense_forward_scalar(reinterpret_cast<const int16_t*>(l1_output),
+            simd::dense_forward_scalar(reinterpret_cast<const int16_t*>(l1_expanded.data()),
                                      l2_weights.data(), l2_biases.data(),
-                                     l2_output, L2_SIZE, L3_SIZE, l2_scale);
+                                     l2_output.data(), l2_size * 2, l3_size, l2_scale);
         }
     
-    // Output: 32 -> 1 (no activation)
+    // Output: l3_size -> 1 (no activation)
     int32_t output_acc = output_biases[0];
-    for (int i = 0; i < L3_SIZE; ++i) {
+    for (int i = 0; i < l3_size; ++i) {
         output_acc += static_cast<int32_t>(l2_output[i]) * static_cast<int32_t>(output_weights[i]);
     }
     
@@ -261,9 +288,9 @@ float LayerStack::forward(const int16_t* input) const {
 
 // NNUEEvaluator implementation
 NNUEEvaluator::NNUEEvaluator() 
-    : num_ls_buckets_(8), visual_threshold_(0.0f),
-      conv_output_(OUTPUT_GRID_SIZE * OUTPUT_GRID_SIZE * OUTPUT_CHANNELS),
-      ft_output_(L1_SIZE) {
+    : num_features_(0), l1_size_(0), l2_size_(0), l3_size_(0), 
+      num_ls_buckets_(0), grid_size_(0), num_channels_per_square_(0),
+      visual_threshold_(0.0f), nnue2score_(600.0f), quantized_one_(127.0f) {
 }
 
 bool NNUEEvaluator::load_model(const std::string& path) {
@@ -297,16 +324,15 @@ bool NNUEEvaluator::load_model(const std::string& path) {
     file.read(reinterpret_cast<char*>(&l3_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&num_ls_buckets_), sizeof(uint32_t));
     
-    if (num_features != GRID_FEATURES || l1_size != L1_SIZE || 
-        l2_size != L2_SIZE || l3_size != L3_SIZE) {
-        std::cerr << "Architecture mismatch" << std::endl;
-        return false;
-    }
+    // Store architecture parameters
+    num_features_ = num_features;
+    l1_size_ = l1_size;
+    l2_size_ = l2_size;
+    l3_size_ = l3_size;
     
     // Read quantization parameters
-    float nnue2score, quantized_one;
-    file.read(reinterpret_cast<char*>(&nnue2score), sizeof(float));
-    file.read(reinterpret_cast<char*>(&quantized_one), sizeof(float));
+    file.read(reinterpret_cast<char*>(&nnue2score_), sizeof(float));
+    file.read(reinterpret_cast<char*>(&quantized_one_), sizeof(float));
     file.read(reinterpret_cast<char*>(&visual_threshold_), sizeof(float));
     
     // Load conv layer
@@ -315,9 +341,25 @@ bool NNUEEvaluator::load_model(const std::string& path) {
         return false;
     }
     
+    // Calculate grid parameters from conv layer and num_features
+    num_channels_per_square_ = conv_layer_.out_channels;
+    grid_size_ = static_cast<int>(std::sqrt(num_features / num_channels_per_square_));
+    
+    if (grid_size_ * grid_size_ * num_channels_per_square_ != num_features) {
+        std::cerr << "Invalid feature grid calculation" << std::endl;
+        return false;
+    }
+    
     // Load feature transformer
     if (!feature_transformer_.load_from_stream(file)) {
         std::cerr << "Failed to load feature transformer" << std::endl;
+        return false;
+    }
+    
+    // Verify feature transformer architecture matches
+    if (feature_transformer_.num_features != num_features_ || 
+        feature_transformer_.output_size != l1_size_) {
+        std::cerr << "Feature transformer architecture mismatch" << std::endl;
         return false;
     }
     
@@ -330,52 +372,84 @@ bool NNUEEvaluator::load_model(const std::string& path) {
             std::cerr << "Failed to load layer stack " << i << std::endl;
             return false;
         }
+        
+        // Verify layer stack architecture
+        if (layer_stacks_[i].l1_size != l1_size_ ||
+            layer_stacks_[i].l2_size != l2_size_ ||
+            layer_stacks_[i].l3_size != l3_size_) {
+            std::cerr << "Layer stack architecture mismatch" << std::endl;
+            return false;
+        }
     }
     
+    // Initialize working buffers with correct sizes
+    int conv_output_size = grid_size_ * grid_size_ * num_channels_per_square_;
+    conv_output_.resize(conv_output_size);
+    
+    feature_grid_ = std::make_unique<DynamicGrid>(grid_size_, num_channels_per_square_);
+    
+    ft_output_.resize(l1_size_);
+    
     std::cout << "Successfully loaded NNUE model:" << std::endl;
-    std::cout << "  Features: " << num_features << std::endl;
+    std::cout << "  Features: " << num_features_ << " (" << grid_size_ << "x" << grid_size_ 
+              << "x" << num_channels_per_square_ << ")" << std::endl;
+    std::cout << "  Architecture: " << l1_size_ << " -> " << l2_size_ << " -> " << l3_size_ << " -> 1" << std::endl;
     std::cout << "  Layer stacks: " << num_ls_buckets_ << std::endl;
     std::cout << "  Visual threshold: " << visual_threshold_ << std::endl;
     
     return true;
 }
 
-float NNUEEvaluator::evaluate(const float* image_data, int layer_stack_index) const {
+float NNUEEvaluator::evaluate(const float* image_data, int image_h, int image_w, int layer_stack_index) const {
     if (layer_stack_index >= num_ls_buckets_) {
         layer_stack_index = 0;
     }
     
-    // Step 1: Convolution 96x96x3 -> 32x32x64
-    conv_layer_.forward(image_data, conv_output_.data());
+    // Calculate conv stride to hit target grid size
+    int conv_stride = image_h / grid_size_;
+    if (conv_stride < 1) conv_stride = 1;
     
-    // Step 2: Convert to uint64 grid and extract active features efficiently
-    feature_grid_.from_conv_output(conv_output_.data(), visual_threshold_);
-    feature_grid_.extract_features(active_features_);
+    // Step 1: Convolution image_h x image_w x 3 -> grid_size x grid_size x num_channels_per_square
+    conv_layer_.forward(image_data, conv_output_.data(), image_h, image_w, conv_stride);
+    
+    // Step 2: Convert to feature grid and extract active features efficiently
+    feature_grid_->from_conv_output(conv_output_.data(), visual_threshold_);
+    feature_grid_->extract_features(active_features_);
     
     // Step 3: Feature transformer (sparse -> dense)
     feature_transformer_.forward(active_features_, ft_output_.data());
     
     // Step 4: Apply clipped ReLU to feature transformer output
-    for (int i = 0; i < L1_SIZE; ++i) {
+    for (int i = 0; i < l1_size_; ++i) {
         ft_output_[i] = std::max(static_cast<int16_t>(0), 
-                                std::min(ft_output_[i], static_cast<int16_t>(QUANTIZED_ONE)));
+                                std::min(ft_output_[i], static_cast<int16_t>(quantized_one_)));
     }
     
     // Step 5: Pass through layer stack
     float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data());
     
     // Step 6: Apply final scaling
-    return raw_output * NNUE2SCORE;
+    return raw_output * nnue2score_;
 }
 
-std::vector<int> NNUEEvaluator::extract_features(const int8_t* grid_data, float threshold) {
-    std::vector<int> features;
-    for (int i = 0; i < GRID_FEATURES; ++i) {
-        if (static_cast<float>(grid_data[i]) > threshold) {
-            features.push_back(i);
+std::vector<int> NNUEEvaluator::extract_features(const int8_t* grid_data, 
+                                                int grid_size, int num_channels,
+                                                float threshold) {
+    std::vector<int> active_features;
+    
+    for (int h = 0; h < grid_size; ++h) {
+        for (int w = 0; w < grid_size; ++w) {
+            for (int c = 0; c < num_channels; ++c) {
+                int idx = (h * grid_size + w) * num_channels + c;
+                if (static_cast<float>(grid_data[idx]) > threshold) {
+                    int feature_idx = (h * grid_size + w) * num_channels + c;
+                    active_features.push_back(feature_idx);
+                }
+            }
         }
     }
-    return features;
+    
+    return active_features;
 }
 
 } // namespace nnue 

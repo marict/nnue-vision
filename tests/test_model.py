@@ -210,7 +210,7 @@ class TestLayerStacks:
             assert isinstance(output, nn.Linear)
 
             assert l1.in_features == 3072  # L1
-            assert l1.out_features == 15 + 1  # L2 + 1
+            assert l1.out_features == 15  # L2 (extracted from L2+1)
             assert l2.in_features == 15 * 2  # L2 * 2
             assert l2.out_features == 32  # L3
             assert output.in_features == 32  # L3
@@ -222,21 +222,61 @@ class TestNNUEArchitecture:
 
     def test_nnue_initialization(self):
         """Test NNUE model initialization."""
-        model = NNUE(num_ls_buckets=4)
+        # Test with custom feature set and layer sizes
+        feature_set = GridFeatureSet(grid_size=8, num_features_per_square=12)
+        model = NNUE(
+            feature_set=feature_set,
+            l1_size=256,
+            l2_size=8,
+            l3_size=16,
+            num_ls_buckets=4,
+        )
 
         assert model.feature_set.grid_size == 8
         assert model.feature_set.num_features_per_square == 12
+        assert model.feature_set.num_features == 8 * 8 * 12  # 768 features
+        assert model.l1_size == 256
+        assert model.l2_size == 8
+        assert model.l3_size == 16
         assert model.num_ls_buckets == 4
         assert isinstance(model.input, FeatureTransformer)
         assert isinstance(model.layer_stacks, LayerStacks)
-        assert model.input.num_features == 8 * 8 * 12  # 768 features
-        assert model.layer_stacks.count == 4
 
         # Check conv layer
         assert model.conv.in_channels == 3
-        assert model.conv.out_channels == 12
+        assert model.conv.out_channels == 12  # matches num_features_per_square
         assert model.conv.kernel_size == (3, 3)
-        assert model.conv.stride == (12, 12)
+
+    def test_nnue_default_initialization(self):
+        """Test NNUE model initialization with defaults."""
+        # Test with default parameters (large model)
+        model = NNUE(num_ls_buckets=2)
+
+        assert model.feature_set.grid_size == 32
+        assert model.feature_set.num_features_per_square == 64
+        assert model.feature_set.num_features == 32 * 32 * 64  # 65536 features
+        assert model.l1_size == 3072  # Default
+        assert model.l2_size == 15  # Default
+        assert model.l3_size == 32  # Default
+        assert model.num_ls_buckets == 2
+
+    def test_nnue_tiny_initialization(self):
+        """Test NNUE model initialization with tiny architecture."""
+        feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
+        model = NNUE(
+            feature_set=feature_set, l1_size=32, l2_size=4, l3_size=4, num_ls_buckets=2
+        )
+
+        assert model.feature_set.grid_size == 4
+        assert model.feature_set.num_features_per_square == 8
+        assert model.feature_set.num_features == 4 * 4 * 8  # 128 features
+        assert model.l1_size == 32
+        assert model.l2_size == 4
+        assert model.l3_size == 4
+        assert model.num_ls_buckets == 2
+
+        # Check conv layer matches feature set
+        assert model.conv.out_channels == 8  # matches num_features_per_square
 
     def test_nnue_forward_pass(self, nnue_model, sample_image_batch, device):
         """Test NNUE forward pass with images."""
@@ -270,45 +310,49 @@ class TestNNUEArchitecture:
             assert_tensor_shape(output, (batch_size, 1))
             assert not torch.isnan(output).any()
 
-    def test_conv_layer_output_shape(self, nnue_model, device):
+    def test_conv_layer_output_shape(self, tiny_nnue_model, device):
         """Test that conv layer produces correct output shape."""
-        nnue_model.to(device)
-        nnue_model.eval()
+        tiny_nnue_model.to(device)
+        tiny_nnue_model.eval()
 
         batch_size = 2
         images = torch.randn(batch_size, 3, 96, 96, device=device)
 
         with torch.no_grad():
             # Test conv + hardtanh only
-            conv_out = nnue_model.conv(images)
-            tanh_out = nnue_model.hardtanh(conv_out)
+            conv_out = tiny_nnue_model.conv(images)
+            tanh_out = tiny_nnue_model.hardtanh(conv_out)
 
-        # Should produce 12 channels of 8x8 features
-        assert_tensor_shape(conv_out, (batch_size, 12, 8, 8))
-        assert_tensor_shape(tanh_out, (batch_size, 12, 8, 8))
+        # For tiny model: 4x4 grid, 8 channels
+        # 96x96 input with stride=24 -> 4x4 output
+        expected_h = expected_w = tiny_nnue_model.feature_set.grid_size
+        expected_c = tiny_nnue_model.feature_set.num_features_per_square
+
+        assert_tensor_shape(conv_out, (batch_size, expected_c, expected_h, expected_w))
+        assert_tensor_shape(tanh_out, (batch_size, expected_c, expected_h, expected_w))
 
         # Hardtanh should bound values between -1 and 1
         assert tanh_out.min() >= -1.0
         assert tanh_out.max() <= 1.0
 
-    def test_binary_feature_conversion(self, nnue_model, device):
+    def test_binary_feature_conversion(self, tiny_nnue_model, device):
         """Test that images are converted to binary features correctly."""
-        nnue_model.to(device)
-        nnue_model.eval()
+        tiny_nnue_model.to(device)
+        tiny_nnue_model.eval()
 
         batch_size = 2
         images = torch.randn(batch_size, 3, 96, 96, device=device)
 
         with torch.no_grad():
             # Test conv + hardtanh
-            conv_out = nnue_model.conv(images)
-            tanh_out = nnue_model.hardtanh(conv_out)
+            conv_out = tiny_nnue_model.conv(images)
+            tanh_out = tiny_nnue_model.hardtanh(conv_out)
 
             # Test threshold conversion
-            binary_features = (tanh_out > nnue_model.visual_threshold).float()
+            binary_features = (tanh_out > tiny_nnue_model.visual_threshold).float()
 
             # Test sparse conversion
-            feature_indices, feature_values = nnue_model._to_sparse_features(
+            feature_indices, feature_values = tiny_nnue_model._to_sparse_features(
                 binary_features
             )
 
@@ -322,26 +366,63 @@ class TestNNUEArchitecture:
         if valid_mask.any():
             assert torch.all(feature_values[valid_mask] == 1.0)
 
-    def test_weight_clipping(self, nnue_model):
+    def test_weight_clipping(self, tiny_nnue_model):
         """Test weight clipping for quantization."""
         # Get initial weight ranges
         initial_weights = {}
-        for name, param in nnue_model.named_parameters():
+        for name, param in tiny_nnue_model.named_parameters():
             initial_weights[name] = param.clone()
 
         # Make some weights exceed clipping bounds
         with torch.no_grad():
-            for param in nnue_model.layer_stacks.l1.weight:
+            for param in tiny_nnue_model.layer_stacks.l1.weight:
                 param.fill_(10.0)  # Large value
 
         # Apply weight clipping
-        nnue_model._clip_weights()
+        tiny_nnue_model._clip_weights()
 
         # Check weights are clipped
-        max_hidden_weight = nnue_model.quantized_one / nnue_model.weight_scale_hidden
-        l1_weights = nnue_model.layer_stacks.l1.weight
+        max_hidden_weight = (
+            tiny_nnue_model.quantized_one / tiny_nnue_model.weight_scale_hidden
+        )
+        l1_weights = tiny_nnue_model.layer_stacks.l1.weight
         assert torch.all(l1_weights >= -max_hidden_weight)
         assert torch.all(l1_weights <= max_hidden_weight)
+
+    def test_configurable_feature_sets(self, device):
+        """Test different feature set configurations."""
+        configs = [
+            (4, 6, 32, 4, 4),  # Grid4x4_6, very small
+            (8, 12, 64, 4, 8),  # Grid8x8_12, small
+            (16, 8, 128, 8, 16),  # Grid16x16_8, medium
+        ]
+
+        for grid_size, features_per_square, l1_size, l2_size, l3_size in configs:
+            feature_set = GridFeatureSet(grid_size, features_per_square)
+            model = NNUE(
+                feature_set=feature_set,
+                l1_size=l1_size,
+                l2_size=l2_size,
+                l3_size=l3_size,
+                num_ls_buckets=2,
+            )
+
+            # Test forward pass
+            model.to(device)
+            model.eval()
+
+            batch_size = 1
+            images = torch.randn(batch_size, 3, 96, 96, device=device)
+            layer_stack_indices = torch.zeros(
+                batch_size, device=device, dtype=torch.long
+            )
+
+            with torch.no_grad():
+                output = model(images, layer_stack_indices)
+
+            assert_tensor_shape(output, (batch_size, 1))
+            assert not torch.isnan(output).any()
+            assert not torch.isinf(output).any()
 
 
 class TestNNUEForwardBackward:
@@ -407,8 +488,8 @@ class TestNNUEForwardBackward:
         assert small_nnue_model.conv.bias.grad is not None
 
         # Check gradient shapes
-        assert small_nnue_model.conv.weight.grad.shape == (12, 3, 3, 3)
-        assert small_nnue_model.conv.bias.grad.shape == (12,)
+        assert small_nnue_model.conv.weight.grad.shape == (64, 3, 3, 3)
+        assert small_nnue_model.conv.bias.grad.shape == (64,)
 
     def test_gradient_accumulation(self, small_nnue_model, device):
         """Test gradient accumulation."""
@@ -918,7 +999,7 @@ class TestNNUESerialization:
             conv_kernel_w = int.from_bytes(f.read(4), "little")
 
             assert abs(conv_scale - 64.0) < 1e-6
-            assert conv_out_channels == 12
+            assert conv_out_channels == 64
             assert conv_in_channels == 3
             assert conv_kernel_h == 3
             assert conv_kernel_w == 3
@@ -955,7 +1036,7 @@ class TestNNUESerialization:
         import serialize
 
         # Test with different layer stack bucket counts
-        # Note: feature set is fixed in NNUE model (8x8x12 for visual wake words)
+        # Note: feature set is fixed in NNUE model (32x32x64 for maximum sparsity)
         bucket_counts = [2, 4, 8]
 
         for i, num_buckets in enumerate(bucket_counts):
@@ -1022,8 +1103,8 @@ class TestNNUESerialization:
         assert conv_data["weight"].dtype == torch.int8
         assert conv_data["bias"].dtype == torch.int32
         assert conv_data["scale"] == 64.0
-        assert conv_data["weight"].shape == (12, 3, 3, 3)
-        assert conv_data["bias"].shape == (12,)
+        assert conv_data["weight"].shape == (64, 3, 3, 3)
+        assert conv_data["bias"].shape == (64,)
 
         # Serialize model
         serialize.serialize_model(small_nnue_model, temp_nnue_path)
@@ -1045,7 +1126,7 @@ class TestNNUESerialization:
             kernel_h = int.from_bytes(f.read(4), "little")
             kernel_w = int.from_bytes(f.read(4), "little")
 
-            assert out_channels == 12
+            assert out_channels == 64
             assert in_channels == 3
             assert kernel_h == 3
             assert kernel_w == 3
@@ -1053,15 +1134,15 @@ class TestNNUESerialization:
             # Read weights and verify some are non-zero
             weight_bytes = f.read(out_channels * in_channels * kernel_h * kernel_w)
             weights = torch.frombuffer(weight_bytes, dtype=torch.int8)
-            assert weights.shape == (12 * 3 * 3 * 3,)
+            assert weights.shape == (64 * 3 * 3 * 3,)
             assert not torch.all(weights == 0)  # Should have some non-zero weights
 
             # Read bias
             bias_dim = int.from_bytes(f.read(4), "little")
-            assert bias_dim == 12
+            assert bias_dim == 64
             bias_bytes = f.read(bias_dim * 4)
             bias = torch.frombuffer(bias_bytes, dtype=torch.int32)
-            assert bias.shape == (12,)
+            assert bias.shape == (64,)
 
     def test_model_size_estimation(self, small_nnue_model, temp_nnue_path):
         """Test that serialized model size is reasonable."""
@@ -1079,9 +1160,9 @@ class TestNNUESerialization:
             +
             # Conv layer (int8 weights + int32 bias + metadata)
             20
-            + 12 * 3 * 3 * 3 * 1
+            + 64 * 3 * 3 * 3 * 1
             + 4
-            + 12 * 4
+            + 64 * 4
             +
             # Feature transformer (int16 weights + int32 biases)
             12

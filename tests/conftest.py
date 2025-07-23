@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dataset import SyntheticVisualWakeWordsDataset, create_data_loaders
+from data import VisualWakeWordsDataset, create_data_loaders
 from model import NNUE, GridFeatureSet, LossParams
 
 
@@ -32,9 +32,21 @@ def small_grid_feature_set():
 
 
 @pytest.fixture
+def tiny_grid_feature_set():
+    """Return a very small GridFeatureSet for the fastest testing."""
+    return GridFeatureSet(grid_size=4, num_features_per_square=8)
+
+
+@pytest.fixture
 def nnue_model():
     """Return an NNUE model for testing."""
+    # Use smaller architecture for faster tests
+    feature_set = GridFeatureSet(grid_size=8, num_features_per_square=12)
     return NNUE(
+        feature_set=feature_set,
+        l1_size=256,  # Much smaller than default 3072
+        l2_size=8,  # Smaller than default 15
+        l3_size=16,  # Smaller than default 32
         max_epoch=10,
         num_batches_per_epoch=100,
         lr=1e-3,
@@ -45,11 +57,32 @@ def nnue_model():
 @pytest.fixture
 def small_nnue_model():
     """Return a smaller NNUE model for faster testing."""
+    feature_set = GridFeatureSet(grid_size=4, num_features_per_square=6)
     return NNUE(
+        feature_set=feature_set,
+        l1_size=64,  # Very small L1
+        l2_size=4,  # Very small L2
+        l3_size=8,  # Very small L3
         max_epoch=10,
         num_batches_per_epoch=100,
         lr=1e-3,
         num_ls_buckets=2,  # Very small for testing
+    )
+
+
+@pytest.fixture
+def tiny_nnue_model():
+    """Return the smallest possible NNUE model for the fastest testing."""
+    feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
+    return NNUE(
+        feature_set=feature_set,
+        l1_size=32,  # Tiny L1
+        l2_size=4,  # Tiny L2
+        l3_size=4,  # Tiny L3
+        max_epoch=10,
+        num_batches_per_epoch=100,
+        lr=1e-3,
+        num_ls_buckets=2,  # Minimal buckets
     )
 
 
@@ -87,6 +120,21 @@ def small_image_batch(device):
 
     targets = torch.rand(batch_size, 1, device=device)
     scores = torch.randn(batch_size, 1, device=device) * 50
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+
+    return (images, targets, scores, layer_stack_indices)
+
+
+@pytest.fixture
+def tiny_image_batch(device):
+    """Return the smallest batch for the fastest testing."""
+    batch_size = 2
+
+    # Generate random 96x96 RGB images
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    targets = torch.rand(batch_size, 1, device=device)
+    scores = torch.randn(batch_size, 1, device=device) * 20
     layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
 
     return (images, targets, scores, layer_stack_indices)
@@ -135,6 +183,27 @@ def small_sparse_batch(small_grid_feature_set, device):
 
 
 @pytest.fixture
+def tiny_sparse_batch(tiny_grid_feature_set, device):
+    """Return the smallest sparse batch for fastest testing."""
+    batch_size = 2
+    max_features = 8
+
+    feature_indices = torch.randint(
+        0,
+        tiny_grid_feature_set.num_features,
+        (batch_size, max_features),
+        device=device,
+    )
+
+    mask = torch.rand(batch_size, max_features) < 0.8
+    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+
+    feature_values = torch.ones(batch_size, max_features, device=device)
+
+    return (feature_indices, feature_values)
+
+
+@pytest.fixture
 def trained_nnue_model(small_nnue_model, device):
     """Return an NNUE model that has been trained for a few steps."""
     small_nnue_model.to(device)
@@ -163,6 +232,37 @@ def trained_nnue_model(small_nnue_model, device):
         optimizer.step()
 
     return small_nnue_model
+
+
+@pytest.fixture
+def trained_tiny_model(tiny_nnue_model, device):
+    """Return a tiny NNUE model that has been trained for a few steps."""
+    tiny_nnue_model.to(device)
+    tiny_nnue_model.train()
+
+    # Create synthetic training data
+    batch_size = 2
+
+    optimizer = torch.optim.Adam(tiny_nnue_model.parameters(), lr=1e-3)
+
+    # Train for a few steps
+    for step in range(2):
+        # Generate synthetic image batch
+        images = torch.randn(batch_size, 3, 96, 96, device=device)
+        targets = torch.rand(batch_size, 1, device=device)
+        scores = torch.randn(batch_size, 1, device=device) * 20
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+
+        batch = (images, targets, scores, layer_stack_indices)
+
+        # Training step
+        loss = tiny_nnue_model.training_step(batch, step)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return tiny_nnue_model
 
 
 @pytest.fixture
@@ -198,10 +298,8 @@ def simple_test_model():
 
 @pytest.fixture
 def small_dataset():
-    """Return a small synthetic dataset for testing."""
-    return SyntheticVisualWakeWordsDataset(
-        split="train", target_size=(96, 96), num_samples=10
-    )
+    """Return a small dataset for testing."""
+    return VisualWakeWordsDataset(split="train", target_size=(96, 96), max_samples=10)
 
 
 @pytest.fixture
@@ -211,6 +309,8 @@ def data_loaders():
         batch_size=4,
         num_workers=0,  # No multiprocessing for tests
         target_size=(96, 96),
+        max_samples_per_split=8,
+        use_synthetic=True,  # Use synthetic data for faster tests
     )
 
 
