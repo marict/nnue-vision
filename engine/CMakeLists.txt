@@ -68,6 +68,10 @@ target_link_libraries(test_nnue_engine nnue_engine)
 add_executable(nnue_example examples/example_usage.cpp)
 target_link_libraries(nnue_example nnue_engine)
 
+# Add the benchmark executable
+add_executable(benchmark_engine benchmark_engine.cpp)
+target_link_libraries(benchmark_engine nnue_engine)
+
 # Installation
 install(TARGETS nnue_engine
     LIBRARY DESTINATION lib
