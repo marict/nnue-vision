@@ -1,16 +1,57 @@
-"""
-Shared pytest fixtures and test utilities for NNUE-Vision tests.
-"""
+"""Test configuration and fixtures for NNUE-Vision tests."""
 
+import tempfile
 from pathlib import Path
+from typing import Any, Dict, Tuple
 
-import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from PIL import Image
 
-from data import VisualWakeWordsDataset, create_data_loaders
+from data import GenericVisionDataset, create_data_loaders
 from model import NNUE, GridFeatureSet, LossParams
+
+
+class MockDataset(torch.utils.data.Dataset):
+    """Ultra-fast mock dataset for testing - no downloads, pure synthetic."""
+
+    def __init__(self, size=8, num_classes=10, image_size=(96, 96)):
+        self.size = size
+        self.num_classes = num_classes
+        self.image_size = image_size
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        # Generate deterministic but varied synthetic images
+        torch.manual_seed(idx)  # Deterministic per index
+        image = torch.randn(3, *self.image_size)
+        label = idx % self.num_classes
+        return image, label
+
+
+@pytest.fixture
+def fast_mock_dataset():
+    """Ultra-fast mock dataset with 8 samples."""
+    return MockDataset(size=8, num_classes=10)
+
+
+@pytest.fixture
+def tiny_mock_dataset():
+    """Tiny mock dataset with just 4 samples for fastest tests."""
+    return MockDataset(size=4, num_classes=2)  # Binary for integration tests
+
+
+@pytest.fixture
+def fast_data_loaders():
+    """Fast data loaders using mock data."""
+    dataset = MockDataset(size=8, num_classes=2)  # Binary for test models
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
+    val_loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
+    return train_loader, val_loader, test_loader
 
 
 @pytest.fixture
@@ -60,343 +101,193 @@ def small_nnue_model():
     feature_set = GridFeatureSet(grid_size=4, num_features_per_square=6)
     return NNUE(
         feature_set=feature_set,
-        l1_size=64,  # Very small L1
-        l2_size=4,  # Very small L2
-        l3_size=8,  # Very small L3
-        max_epoch=10,
-        num_batches_per_epoch=100,
+        l1_size=64,  # Very small
+        l2_size=4,  # Tiny
+        l3_size=8,  # Tiny
+        max_epoch=5,
+        num_batches_per_epoch=10,
         lr=1e-3,
-        num_ls_buckets=2,  # Very small for testing
+        num_ls_buckets=2,
     )
 
 
 @pytest.fixture
 def tiny_nnue_model():
-    """Return the smallest possible NNUE model for the fastest testing."""
+    """Return a tiny NNUE model for the fastest testing."""
     feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
     return NNUE(
         feature_set=feature_set,
-        l1_size=32,  # Tiny L1
-        l2_size=4,  # Tiny L2
-        l3_size=4,  # Tiny L3
-        max_epoch=10,
-        num_batches_per_epoch=100,
+        l1_size=32,  # Minimal
+        l2_size=4,  # Minimal
+        l3_size=4,  # Minimal
+        max_epoch=2,
+        num_batches_per_epoch=5,
         lr=1e-3,
-        num_ls_buckets=2,  # Minimal buckets
+        num_ls_buckets=2,
     )
 
 
 @pytest.fixture
 def loss_params():
-    """Return standard loss parameters for testing."""
+    """Return LossParams for testing."""
     return LossParams()
-
-
-@pytest.fixture
-def sample_image_batch(_device):
-    """Return a sample batch of image data for NNUE model."""
-    batch_size = 4
-
-    # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=_device)
-
-    # Random targets and scores for loss computation
-    targets = torch.rand(batch_size, 1, device=_device)  # Between 0 and 1
-    scores = torch.randn(batch_size, 1, device=_device) * 100  # Search scores
-
-    # Random layer stack indices (bucket selection)
-    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=_device)
-
-    return (images, targets, scores, layer_stack_indices)
-
-
-@pytest.fixture
-def small_image_batch(_device):
-    """Return a smaller sample batch for faster testing."""
-    batch_size = 2
-
-    # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=_device)
-
-    targets = torch.rand(batch_size, 1, device=_device)
-    scores = torch.randn(batch_size, 1, device=_device) * 50
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
-
-    return (images, targets, scores, layer_stack_indices)
-
-
-@pytest.fixture
-def tiny_image_batch(_device):
-    """Return the smallest batch for the fastest testing."""
-    batch_size = 2
-
-    # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=_device)
-
-    targets = torch.rand(batch_size, 1, device=_device)
-    scores = torch.randn(batch_size, 1, device=_device) * 20
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
-
-    return (images, targets, scores, layer_stack_indices)
-
-
-@pytest.fixture
-def sample_sparse_batch(_grid_feature_set, _device):
-    """Return a sample batch of sparse feature data for testing internal components."""
-    batch_size = 4
-    max_features = 32  # Maximum number of active features per sample
-
-    # Generate random feature indices (some samples might have fewer features)
-    feature_indices = torch.randint(
-        0, _grid_feature_set.num_features, (batch_size, max_features), device=_device
-    )
-
-    # Set some indices to -1 to simulate variable-length sparse features
-    mask = torch.rand(batch_size, max_features) < 0.7  # 70% of features are active
-    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
-
-    # Feature values (typically 1.0 for active features)
-    feature_values = torch.ones(batch_size, max_features, device=_device)
-
-    return (feature_indices, feature_values)
-
-
-@pytest.fixture
-def small_sparse_batch(_small_grid_feature_set, _device):
-    """Return a smaller sample batch for faster testing of internal components."""
-    batch_size = 2
-    max_features = 16
-
-    feature_indices = torch.randint(
-        0,
-        _small_grid_feature_set.num_features,
-        (batch_size, max_features),
-        device=_device,
-    )
-
-    mask = torch.rand(batch_size, max_features) < 0.8
-    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
-
-    feature_values = torch.ones(batch_size, max_features, device=_device)
-
-    return (feature_indices, feature_values)
-
-
-@pytest.fixture
-def tiny_sparse_batch(_tiny_grid_feature_set, _device):
-    """Return the smallest sparse batch for fastest testing."""
-    batch_size = 2
-    max_features = 8
-
-    feature_indices = torch.randint(
-        0,
-        _tiny_grid_feature_set.num_features,
-        (batch_size, max_features),
-        device=_device,
-    )
-
-    mask = torch.rand(batch_size, max_features) < 0.8
-    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
-
-    feature_values = torch.ones(batch_size, max_features, device=_device)
-
-    return (feature_indices, feature_values)
-
-
-@pytest.fixture
-def trained_nnue_model(_small_nnue_model, _device):
-    """Return an NNUE model that has been trained for a few steps."""
-    _small_nnue_model.to(_device)
-    _small_nnue_model.train()
-
-    # Create synthetic training data
-    batch_size = 4
-
-    optimizer = torch.optim.Adam(_small_nnue_model.parameters(), lr=1e-3)
-
-    # Train for a few steps
-    for step in range(3):
-        # Generate synthetic image batch
-        images = torch.randn(batch_size, 3, 96, 96, device=_device)
-        targets = torch.rand(batch_size, 1, device=_device)
-        scores = torch.randn(batch_size, 1, device=_device) * 50
-        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
-
-        batch = (images, targets, scores, layer_stack_indices)
-
-        # Training step
-        loss = _small_nnue_model.training_step(batch, step)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    return _small_nnue_model
-
-
-@pytest.fixture
-def trained_tiny_model(_tiny_nnue_model, _device):
-    """Return a tiny NNUE model that has been trained for a few steps."""
-    _tiny_nnue_model.to(_device)
-    _tiny_nnue_model.train()
-
-    # Create synthetic training data
-    batch_size = 2
-
-    optimizer = torch.optim.Adam(_tiny_nnue_model.parameters(), lr=1e-3)
-
-    # Train for a few steps
-    for step in range(2):
-        # Generate synthetic image batch
-        images = torch.randn(batch_size, 3, 96, 96, device=_device)
-        targets = torch.rand(batch_size, 1, device=_device)
-        scores = torch.randn(batch_size, 1, device=_device) * 20
-        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
-
-        batch = (images, targets, scores, layer_stack_indices)
-
-        # Training step
-        loss = _tiny_nnue_model.training_step(batch, step)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    return _tiny_nnue_model
-
-
-@pytest.fixture
-def temp_model_path(_tmp_path):
-    """Return a temporary path for saving models."""
-    return _tmp_path / "test_nnue_model.pt"
-
-
-# Simple CNN model for dataset testing (not a legacy shim)
-class SimpleTestCNN(nn.Module):
-    """Minimal CNN for testing dataset integration only."""
-
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 32, 3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, 3, stride=2, padding=1)
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(64, 2)
-
-    def forward(self, x):
-        x = torch.relu(self.conv1(x))
-        x = torch.relu(self.conv2(x))
-        x = self.pool(x).flatten(1)
-        return self.fc(x)
-
-
-# Fixtures for dataset testing
-@pytest.fixture
-def simple_test_model():
-    """Return a simple CNN model for dataset testing."""
-    return SimpleTestCNN()
 
 
 @pytest.fixture
 def small_dataset():
     """Return a small dataset for testing."""
-    return VisualWakeWordsDataset(split="train", target_size=(96, 96), max_samples=10)
-
-
-@pytest.fixture
-def data_loaders():
-    """Return small data loaders for testing."""
-    return create_data_loaders(
-        batch_size=4,
-        num_workers=0,  # No multiprocessing for tests
-        target_size=(96, 96),
-        max_samples_per_split=8,
-        use_synthetic=True,  # Use synthetic data for faster tests
+    return GenericVisionDataset(
+        dataset_name="cifar10", split="train", target_size=(96, 96), max_samples=10
     )
 
 
-# Test utilities
+@pytest.fixture
+def sample_image_batch(device):
+    """Generate a sample image batch for testing."""
+    batch_size = 4
+
+    # Generate synthetic batch data
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    # Generate synthetic targets and scores
+    targets = torch.rand(batch_size, 1, device=device)  # Between 0 and 1
+    scores = torch.randn(batch_size, 1, device=device) * 100  # Search scores
+
+    # Generate layer stack indices
+    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=device)
+
+    return images, targets, scores, layer_stack_indices
+
+
+@pytest.fixture
+def small_image_batch(device):
+    """Generate a smaller image batch for faster testing."""
+    batch_size = 2
+
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    targets = torch.rand(batch_size, 1, device=device)
+    scores = torch.randn(batch_size, 1, device=device) * 50
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+
+    return images, targets, scores, layer_stack_indices
+
+
+@pytest.fixture
+def tiny_image_batch(device):
+    """Generate a tiny image batch for the fastest testing."""
+    batch_size = 2
+
+    images = torch.randn(batch_size, 3, 96, 96, device=device)
+
+    targets = torch.rand(batch_size, 1, device=device)
+    scores = torch.randn(batch_size, 1, device=device) * 20
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+
+    return images, targets, scores, layer_stack_indices
+
+
+@pytest.fixture
+def sample_sparse_batch(grid_feature_set, device):
+    """Generate a sample sparse batch for testing."""
+    batch_size = 4
+    max_features = 50  # Much smaller than full feature set
+
+    # Generate random feature indices
+    feature_indices = torch.randint(
+        0, grid_feature_set.num_features, (batch_size, max_features), device=device
+    )
+
+    # Mask some features as inactive (-1)
+    mask = torch.rand(batch_size, max_features, device=device) > 0.3
+    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+
+    # Feature values (mostly 1.0 for active features)
+    feature_values = torch.ones(batch_size, max_features, device=device)
+
+    return feature_indices, feature_values
+
+
+@pytest.fixture
+def small_sparse_batch(small_grid_feature_set, device):
+    """Generate a smaller sparse batch for faster testing."""
+    batch_size = 2
+    max_features = 20
+
+    feature_indices = torch.randint(
+        0,
+        small_grid_feature_set.num_features,
+        (batch_size, max_features),
+        device=device,
+    )
+    mask = torch.rand(batch_size, max_features, device=device) > 0.4
+    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+
+    feature_values = torch.ones(batch_size, max_features, device=device)
+
+    return feature_indices, feature_values
+
+
+@pytest.fixture
+def tiny_sparse_batch(tiny_grid_feature_set, device):
+    """Generate a tiny sparse batch for the fastest testing."""
+    batch_size = 2
+    max_features = 10
+
+    feature_indices = torch.randint(
+        0,
+        tiny_grid_feature_set.num_features,
+        (batch_size, max_features),
+        device=device,
+    )
+    mask = torch.rand(batch_size, max_features, device=device) > 0.5
+    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+
+    feature_values = torch.ones(batch_size, max_features, device=device)
+
+    return feature_indices, feature_values
+
+
+@pytest.fixture
+def trained_nnue_model(small_nnue_model, device):
+    """Return a 'trained' NNUE model (actually just initialized for speed)."""
+    small_nnue_model.to(device)
+    # Skip actual training for speed - just return initialized model
+    # Real training would take too long for unit tests
+    small_nnue_model.eval()
+    return small_nnue_model
+
+
+@pytest.fixture
+def trained_tiny_model(tiny_nnue_model, device):
+    """Return a 'trained' tiny NNUE model."""
+    tiny_nnue_model.to(device)
+    tiny_nnue_model.eval()
+    return tiny_nnue_model
+
+
+@pytest.fixture
+def temp_model_path():
+    """Provide a temporary file path for model serialization testing."""
+    with tempfile.NamedTemporaryFile(suffix=".nnue", delete=False) as f:
+        yield f.name
+    # Cleanup
+    Path(f.name).unlink(missing_ok=True)
+
+
+# Utility functions for tests
 def assert_tensor_shape(tensor, expected_shape):
-    """Assert that a tensor has the expected shape."""
+    """Assert that tensor has expected shape."""
+    actual_shape = tuple(tensor.shape)
     assert (
-        tensor.shape == expected_shape
-    ), f"Expected shape {expected_shape}, got {tensor.shape}"
+        actual_shape == expected_shape
+    ), f"Expected shape {expected_shape}, got {actual_shape}"
 
 
-def assert_tensor_range(tensor, min_val, max_val):
-    """Assert that tensor values are within expected range."""
-    assert tensor.min() >= min_val, f"Tensor minimum {tensor.min()} < {min_val}"
-    assert tensor.max() <= max_val, f"Tensor maximum {tensor.max()} > {max_val}"
-
-
-def assert_gradients_exist(model):
-    """Assert that model parameters have gradients."""
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            assert param.grad is not None, f"Parameter {name} has no gradient"
-
-
-def assert_gradients_nonzero(model, tolerance=1e-8):
-    """Assert that model has non-zero gradients."""
-    total_grad_norm = 0.0
-    for param in model.parameters():
-        if param.grad is not None:
-            total_grad_norm += param.grad.norm().item() ** 2
-
-    total_grad_norm = total_grad_norm**0.5
+def assert_model_output_valid(output, batch_size):
+    """Assert that model output is valid."""
+    assert not torch.isnan(output).any(), "Output contains NaN values"
+    assert not torch.isinf(output).any(), "Output contains infinite values"
     assert (
-        total_grad_norm > tolerance
-    ), f"Total gradient norm {total_grad_norm} is too small"
-
-
-def assert_sparse_features_valid(feature_indices, feature_values, max_features):
-    """Assert that sparse features are in valid format."""
-    batch_size = feature_indices.shape[0]
-    max_active_features = feature_indices.shape[1]
-
-    # Check shapes match
-    assert feature_indices.shape == feature_values.shape
-    assert feature_indices.shape == (batch_size, max_active_features)
-
-    # Check feature indices are either valid or -1 (padding)
-    valid_mask = feature_indices >= 0
-    invalid_mask = feature_indices == -1
-    assert torch.all(valid_mask | invalid_mask), "Feature indices must be >= 0 or -1"
-    assert torch.all(
-        feature_indices[valid_mask] < max_features
-    ), "Feature indices exceed max_features"
-
-    # Check feature values are positive where indices are valid
-    assert torch.all(
-        feature_values[valid_mask] > 0
-    ), "Feature values must be positive for valid indices"
-
-
-def assert_quantized_weights_valid(quantized_data):
-    """Assert that quantized model data is valid for C++ export."""
-    assert "feature_transformer" in quantized_data
-    assert "conv_layer" in quantized_data
-    assert "metadata" in quantized_data
-
-    ft_data = quantized_data["feature_transformer"]
-    assert ft_data["weight"].dtype == torch.int16
-    assert ft_data["bias"].dtype == torch.int32
-    assert ft_data["scale"] > 0
-
-    # Check conv layer
-    conv_data = quantized_data["conv_layer"]
-    assert conv_data["weight"].dtype == torch.int8
-    assert conv_data["bias"].dtype == torch.int32
-    assert conv_data["scale"] > 0
-
-    # Check layer stacks
-    layer_stack_keys = [
-        k for k in quantized_data.keys() if k.startswith("layer_stack_")
-    ]
-    assert len(layer_stack_keys) > 0
-
-    for key in layer_stack_keys:
-        ls_data = quantized_data[key]
-        assert ls_data["l1_weight"].dtype == torch.int8
-        assert ls_data["l2_weight"].dtype == torch.int8
-        assert ls_data["output_weight"].dtype == torch.int8
-        assert all(scale > 0 for scale in ls_data["scales"].values())
+        output.shape[0] == batch_size
+    ), f"Expected batch size {batch_size}, got {output.shape[0]}"

@@ -1,4 +1,4 @@
-"""Data loaders for Visual Wake Words dataset."""
+"""Data loaders for generic computer vision datasets."""
 
 from __future__ import annotations
 
@@ -8,76 +8,79 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from .datasets import VWW_CLASS_NAMES, VisualWakeWordsDataset
+from .datasets import (AVAILABLE_DATASETS, GenericVisionDataset,
+                       get_dataset_info)
 
 
 def create_data_loaders(
+    dataset_name: str = "cifar10",
     batch_size: int = 32,
     num_workers: int = 4,
     target_size: Tuple[int, int] = (96, 96),
     max_samples_per_split: Optional[int] = None,
-    streaming: bool = True,
     subset: float = 1.0,
-    use_synthetic: bool = False,
+    data_root: str = "./data/raw",
+    binary_classification: Optional[dict] = None,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Create data loaders for Visual Wake Words dataset.
+    Create data loaders for computer vision datasets.
 
     Args:
+        dataset_name: Name of dataset to load ('cifar10', 'cifar100')
         batch_size: Batch size for data loading
         num_workers: Number of worker processes for data loading
         target_size: Target image size (height, width)
         max_samples_per_split: Maximum samples per split (None for all)
-        streaming: Whether to use streaming mode
         subset: Fraction of dataset to use (0.0 to 1.0)
-        use_synthetic: Whether to use synthetic data (for tests)
+        data_root: Root directory for dataset storage
+        binary_classification: Dict with 'positive_classes' for binary tasks
 
     Returns:
         Tuple of (train_loader, validation_loader, test_loader)
     """
-    print(f"🔄 Creating Visual Wake Words data loaders...")
+    dataset_info = get_dataset_info(dataset_name)
+    print(f"🔄 Creating {dataset_info['name']} data loaders...")
+    print(f"  • Dataset: {dataset_name}")
     print(f"  • Batch size: {batch_size}")
     print(f"  • Target size: {target_size}")
     print(f"  • Max samples per split: {max_samples_per_split or 'All'}")
-    if use_synthetic:
-        print(f"  • Using synthetic data for testing")
-    else:
-        print(f"  • Streaming: {streaming}")
-        print(f"  • Subset: {subset}")
+    print(f"  • Subset: {subset}")
 
-    # Calculate max_samples based on subset if not explicitly provided
-    effective_max_samples = max_samples_per_split
-    if subset < 1.0 and max_samples_per_split is None:
-        # If subset is specified but max_samples is not, we'll let the dataset handle it
-        # by passing subset as a parameter to control the fraction of data used
-        pass
+    if binary_classification:
+        positive_classes = binary_classification.get("positive_classes", [])
+        print(f"  • Binary classification: {positive_classes} → positive")
 
     # Create datasets for each split
-    train_dataset = VisualWakeWordsDataset(
+    train_dataset = GenericVisionDataset(
+        dataset_name=dataset_name,
         split="train",
         target_size=target_size,
-        max_samples=effective_max_samples,
-        streaming=streaming,
+        max_samples=max_samples_per_split,
         subset=subset,
-        use_synthetic=use_synthetic,
+        data_root=data_root,
+        binary_classification=binary_classification,
     )
 
-    val_dataset = VisualWakeWordsDataset(
-        split="validation",
-        target_size=target_size,
-        max_samples=effective_max_samples,
-        streaming=streaming,
-        subset=subset,
-        use_synthetic=use_synthetic,
-    )
-
-    test_dataset = VisualWakeWordsDataset(
+    # For CIFAR datasets, validation and test use the same test split
+    # We can split the test set if needed, but for now use test for both
+    val_dataset = GenericVisionDataset(
+        dataset_name=dataset_name,
         split="test",
         target_size=target_size,
-        max_samples=effective_max_samples,
-        streaming=streaming,
+        max_samples=max_samples_per_split,
         subset=subset,
-        use_synthetic=use_synthetic,
+        data_root=data_root,
+        binary_classification=binary_classification,
+    )
+
+    test_dataset = GenericVisionDataset(
+        dataset_name=dataset_name,
+        split="test",
+        target_size=target_size,
+        max_samples=max_samples_per_split,
+        subset=subset,
+        data_root=data_root,
+        binary_classification=binary_classification,
     )
 
     # Create data loaders
@@ -112,34 +115,48 @@ def create_data_loaders(
     return train_loader, val_loader, test_loader
 
 
-def get_dataset_stats() -> Dict[str, Any]:
-    """Get basic statistics about the Visual Wake Words dataset."""
+def get_dataset_stats(dataset_name: str = "cifar10") -> Dict[str, Any]:
+    """Get basic statistics about a dataset."""
+    dataset_info = get_dataset_info(dataset_name)
+
     return {
-        "name": "Visual Wake Words",
-        "description": "Visual Wake Words dataset for person detection (via HuggingFace)",
-        "num_classes": len(VWW_CLASS_NAMES),
-        "class_names": VWW_CLASS_NAMES,
-        "task": "Binary classification (person detection)",
+        "name": dataset_info["name"],
+        "description": f"{dataset_info['name']} dataset for computer vision",
+        "num_classes": dataset_info["num_classes"],
+        "class_names": dataset_info["classes"],
+        "task": f"{dataset_info['num_classes']}-class classification",
         "input_type": "RGB images",
-        "data_source": "HuggingFace datasets",
+        "input_size": dataset_info["input_size"],
+        "channels": dataset_info["channels"],
+        "data_source": "torchvision.datasets",
     }
 
 
-def print_dataset_stats() -> None:
+def print_dataset_stats(dataset_name: str = "cifar10") -> None:
     """Print comprehensive dataset statistics."""
-    stats = get_dataset_stats()
+    stats = get_dataset_stats(dataset_name)
 
     print("\n" + "=" * 60)
-    print("📊 VISUAL WAKE WORDS DATASET STATISTICS")
+    print(f"📊 {stats['name'].upper()} DATASET STATISTICS")
     print("=" * 60)
 
     print(f"Dataset Name: {stats['name']}")
     print(f"Description: {stats['description']}")
     print(f"Task: {stats['task']}")
     print(f"Input Type: {stats['input_type']}")
+    print(
+        f"Input Size: {stats['input_size'][0]}x{stats['input_size'][1]}x{stats['channels']}"
+    )
     print(f"Data Source: {stats['data_source']}")
     print(f"Number of Classes: {stats['num_classes']}")
-    print(f"Class Names: {', '.join(stats['class_names'])}")
+
+    # Print class names (truncate if too many)
+    if len(stats["class_names"]) <= 20:
+        print(f"Class Names: {', '.join(stats['class_names'])}")
+    else:
+        print(
+            f"Class Names: {', '.join(stats['class_names'][:10])} ... (and {len(stats['class_names'])-10} more)"
+        )
 
 
 def calculate_dataset_statistics(data_loader: DataLoader) -> Dict[str, Any]:
@@ -169,10 +186,20 @@ def calculate_dataset_statistics(data_loader: DataLoader) -> Dict[str, Any]:
 
     # Label statistics
     unique_labels, label_counts = torch.unique(labels, return_counts=True)
-    label_distribution = {
-        VWW_CLASS_NAMES[label.item()]: count.item()
-        for label, count in zip(unique_labels, label_counts)
-    }
+
+    # Get class names from the data loader's dataset
+    if hasattr(data_loader.dataset, "class_names"):
+        class_names = data_loader.dataset.class_names
+        label_distribution = {
+            class_names[label.item()]: count.item()
+            for label, count in zip(unique_labels, label_counts)
+        }
+    else:
+        # Fallback to generic class names
+        label_distribution = {
+            f"class_{label.item()}": count.item()
+            for label, count in zip(unique_labels, label_counts)
+        }
 
     stats = {
         "batch_size": batch_size,

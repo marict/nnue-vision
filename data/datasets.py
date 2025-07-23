@@ -1,4 +1,4 @@
-"""Dataset implementations for Visual Wake Words."""
+"""Generic dataset implementations for computer vision tasks."""
 
 from __future__ import annotations
 
@@ -10,57 +10,131 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import transforms
+from torchvision import datasets, transforms
 
-# Try importing HuggingFace datasets
-try:
-    import datasets
+# Available datasets
+AVAILABLE_DATASETS = {
+    "cifar10": {
+        "name": "CIFAR-10",
+        "classes": [
+            "airplane",
+            "automobile",
+            "bird",
+            "cat",
+            "deer",
+            "dog",
+            "frog",
+            "horse",
+            "ship",
+            "truck",
+        ],
+        "num_classes": 10,
+        "input_size": (32, 32),
+        "channels": 3,
+    },
+    "cifar100": {
+        "name": "CIFAR-100",
+        "classes": [f"class_{i}" for i in range(100)],  # Simplified for now
+        "num_classes": 100,
+        "input_size": (32, 32),
+        "channels": 3,
+    },
+}
 
-    HF_DATASETS_AVAILABLE = True
-except ImportError:
-    HF_DATASETS_AVAILABLE = False
-    datasets = None
-
-# Class names for Visual Wake Words dataset
-VWW_CLASS_NAMES = ["no_person", "person"]
-
-__all__ = ["VisualWakeWordsDataset", "VWW_CLASS_NAMES"]
+__all__ = ["GenericVisionDataset", "AVAILABLE_DATASETS", "get_dataset_info"]
 
 
-class VisualWakeWordsDataset(Dataset):
-    """Visual Wake Words dataset using HuggingFace datasets."""
+def get_dataset_info(dataset_name: str) -> dict:
+    """Get information about a dataset."""
+    if dataset_name not in AVAILABLE_DATASETS:
+        raise ValueError(
+            f"Unknown dataset: {dataset_name}. Available: {list(AVAILABLE_DATASETS.keys())}"
+        )
+    return AVAILABLE_DATASETS[dataset_name]
+
+
+class GenericVisionDataset(Dataset):
+    """Generic vision dataset supporting multiple computer vision benchmarks."""
 
     def __init__(
         self,
+        dataset_name: str = "cifar10",
         split: str = "train",
         target_size: Tuple[int, int] = (96, 96),
         max_samples: Optional[int] = None,
-        streaming: bool = True,
         subset: float = 1.0,
-        use_synthetic: bool = False,
+        data_root: str = "./data/raw",
+        binary_classification: Optional[dict] = None,
     ):
         """
-        Initialize Visual Wake Words dataset.
+        Initialize generic vision dataset.
 
         Args:
-            split: Dataset split ('train', 'validation', 'test')
+            dataset_name: Name of dataset to load ('cifar10', 'cifar100')
+            split: Dataset split ('train', 'test', 'val')
             target_size: Target image size (height, width)
             max_samples: Maximum number of samples to load (None for all)
-            streaming: Whether to use streaming mode for large datasets
             subset: Fraction of dataset to use (0.0 to 1.0)
-            use_synthetic: Whether to use synthetic data (for tests)
+            data_root: Root directory for dataset storage
+            binary_classification: Dict with 'positive_classes' list for binary tasks
         """
+        self.dataset_name = dataset_name
         self.split = split
         self.target_size = target_size
         self.max_samples = max_samples
-        self.streaming = streaming
         self.subset = subset
-        self.use_synthetic = use_synthetic
+        self.data_root = Path(data_root)
+        self.binary_classification = binary_classification
+
+        # Get dataset info
+        self.dataset_info = get_dataset_info(dataset_name)
+
+        # Setup binary classification if specified
+        if binary_classification:
+            positive_classes = binary_classification.get("positive_classes", [])
+            self.class_names = ["negative", "positive"]
+            self.num_classes = 2
+            self.positive_class_indices = set()
+
+            # Convert class names to indices
+            for class_name in positive_classes:
+                if class_name in self.dataset_info["classes"]:
+                    idx = self.dataset_info["classes"].index(class_name)
+                    self.positive_class_indices.add(idx)
+                else:
+                    print(f"Warning: Class '{class_name}' not found in {dataset_name}")
+
+            print(
+                f"Binary classification: {len(self.positive_class_indices)} positive classes"
+            )
+        else:
+            self.class_names = self.dataset_info["classes"]
+            self.num_classes = self.dataset_info["num_classes"]
+            self.positive_class_indices = None
 
         # Image preprocessing pipeline
-        self.transform = transforms.Compose(
+        self.transform = self._build_transform()
+
+        # Load dataset
+        print(f"🔄 Loading {self.dataset_info['name']} dataset ({split} split)...")
+        self.dataset = self._load_dataset()
+
+        # Apply subset and max_samples
+        self.samples = self._prepare_samples()
+
+        print(f"✅ Loaded {len(self.samples)} samples from {self.dataset_info['name']}")
+
+    def _build_transform(self) -> transforms.Compose:
+        """Build image preprocessing pipeline."""
+        transform_list = []
+
+        # Resize if needed
+        if self.target_size != self.dataset_info["input_size"]:
+            transform_list.append(transforms.Resize(self.target_size))
+
+        # Convert to tensor and normalize
+        transform_list.extend(
             [
-                transforms.Resize(target_size),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406],  # ImageNet means
@@ -69,248 +143,88 @@ class VisualWakeWordsDataset(Dataset):
             ]
         )
 
-        # Load dataset
-        if use_synthetic:
-            self.dataset = self._create_synthetic_dataset()
-            self.streaming = False  # Synthetic is always non-streaming
-        else:
-            self.dataset = self._load_dataset()
-
-        # For small datasets (subset < 0.1 or max_samples < 1000), disable streaming
-        # This avoids complexity and makes tests more reliable
-        if self.subset < 0.1 or (
-            self.max_samples is not None and self.max_samples < 1000
-        ):
-            self.streaming = False
-
-        # Convert to list if not streaming and apply limits
-        if not streaming or not self.streaming:
-            if not use_synthetic:
-                print(f"  Converting to non-streaming mode for reliability...")
-            self.samples = list(self.dataset)
-            if self.subset < 1.0:
-                # Apply subset before max_samples
-                subset_size = int(len(self.samples) * self.subset)
-                self.samples = self.samples[:subset_size]
-            if max_samples is not None:
-                self.samples = self.samples[:max_samples]
-            self.streaming = False  # Ensure it's disabled
-        else:
-            self.samples = None
-
-    def _create_synthetic_dataset(self):
-        """Create a synthetic dataset for testing purposes."""
-        import random
-
-        # Determine dataset size based on split
-        split_sizes = {
-            "train": 100,
-            "validation": 50,
-            "test": 50,
-        }
-
-        # Use validation for any unrecognized split
-        base_size = split_sizes.get(self.split, split_sizes["validation"])
-
-        # Apply max_samples limit
-        if self.max_samples is not None:
-            base_size = min(base_size, self.max_samples)
-
-        # Generate synthetic samples
-        samples = []
-        random.seed(42)  # Deterministic for tests
-
-        for i in range(base_size):
-            # Create random RGB image
-            image = Image.new("RGB", (224, 224))
-            pixels = [
-                (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-                for _ in range(224 * 224)
-            ]
-            image.putdata(pixels)
-
-            # Random binary label
-            label = random.randint(0, 1)
-
-            samples.append((image, label))
-
-        return samples
+        return transforms.Compose(transform_list)
 
     def _load_dataset(self):
-        """Load the Visual Wake Words dataset from HuggingFace."""
-        print(f"🔄 Loading Visual Wake Words dataset ({self.split} split)...")
+        """Load the specified dataset using torchvision."""
+        # Map split names
+        is_train = self.split in ["train", "training"]
 
-        if not HF_DATASETS_AVAILABLE:
-            raise RuntimeError(
-                "HuggingFace datasets is required. Install with: pip install datasets"
+        if self.dataset_name == "cifar10":
+            return datasets.CIFAR10(
+                root=self.data_root,
+                train=is_train,
+                download=True,
+                transform=None,  # We'll apply transform manually
             )
-
-        return self._load_huggingface_dataset()
-
-    def _load_huggingface_dataset(self):
-        """Load dataset using HuggingFace datasets."""
-        # Map our split names to actual dataset split names
-        split_mapping = {
-            "train": "train",
-            "validation": ["valid", "val", "validation"],  # Try multiple variants
-            "test": ["test", "val"],  # Often test is combined with val
-        }
-
-        # Get possible split names for our requested split
-        if self.split in split_mapping:
-            possible_splits = split_mapping[self.split]
-            if isinstance(possible_splits, str):
-                possible_splits = [possible_splits]
+        elif self.dataset_name == "cifar100":
+            return datasets.CIFAR100(
+                root=self.data_root,
+                train=is_train,
+                download=True,
+                transform=None,
+            )
         else:
-            possible_splits = [self.split]  # Use as-is if not in mapping
+            raise ValueError(f"Unsupported dataset: {self.dataset_name}")
 
-        # Try different Visual Wake Words datasets on HuggingFace
-        dataset_candidates = [
-            "Maysee/tiny-imagenet",
-            "detection-datasets/coco",
-            "Hamdy20002/COCO_Person",
-        ]
+    def _prepare_samples(self) -> list:
+        """Prepare sample list with subset and max_samples applied."""
+        # Get all samples
+        all_samples = []
+        for i in range(len(self.dataset)):
+            image, label = self.dataset[i]
 
-        for dataset_name in dataset_candidates:
-            try:
-                print(f"  Trying {dataset_name}...")
-
-                # Try each possible split name for this dataset
-                for split_name in possible_splits:
-                    try:
-                        if self.streaming:
-                            dataset = datasets.load_dataset(
-                                dataset_name,
-                                split=split_name,
-                                streaming=True,
-                                trust_remote_code=True,
-                            )
-                        else:
-                            dataset = datasets.load_dataset(
-                                dataset_name, split=split_name, trust_remote_code=True
-                            )
-
-                        print(
-                            f"✅ Successfully loaded {dataset_name} with split '{split_name}'"
-                        )
-                        return self._process_huggingface_dataset(dataset)
-
-                    except Exception as e:
-                        print(f"    Failed split '{split_name}': {str(e)[:100]}...")
-                        continue
-
-            except Exception as e:
-                print(f"  Failed to load {dataset_name}: {e}")
-                continue
-
-        # If we get here, nothing worked
-        available_info = []
-        for dataset_name in dataset_candidates[
-            :2
-        ]:  # Check first 2 for available splits
-            try:
-                builder = datasets.load_dataset_builder(dataset_name)
-                splits = (
-                    list(builder.info.splits.keys())
-                    if hasattr(builder.info, "splits")
-                    else ["unknown"]
-                )
-                available_info.append(f"{dataset_name}: {splits}")
-            except:
-                available_info.append(f"{dataset_name}: unable to check")
-
-        raise RuntimeError(
-            f"Could not load Visual Wake Words dataset for split '{self.split}'.\n"
-            f"Available splits in datasets:\n"
-            + "\n".join(f"  - {info}" for info in available_info)
-            + f"\n\nTried mapping '{self.split}' to: {possible_splits}"
-        )
-
-    def _process_sample(self, sample):
-        """Process a single sample from HuggingFace dataset."""
-        # Extract image
-        if "image" in sample:
-            image = sample["image"]
-        elif "img" in sample:
-            image = sample["img"]
-        else:
-            # Create a dummy image if no image field found
-            image = Image.new("RGB", (224, 224), color="gray")
-
-        # Ensure image is PIL Image
-        if not isinstance(image, Image.Image):
-            if hasattr(image, "convert"):
-                image = image.convert("RGB")
+            # Convert to binary classification if specified
+            if self.binary_classification:
+                binary_label = 1 if label in self.positive_class_indices else 0
+                all_samples.append((image, binary_label))
             else:
-                # Handle numpy arrays or tensors
-                if isinstance(image, np.ndarray):
-                    if image.ndim == 3 and image.shape[0] == 3:  # CHW format
-                        image = np.transpose(image, (1, 2, 0))  # Convert to HWC
-                    image = Image.fromarray(image.astype(np.uint8))
-                else:
-                    image = Image.new("RGB", (224, 224), color="gray")
+                all_samples.append((image, label))
 
-        # Convert to RGB if not already
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+        # Apply max_samples first, then subset
+        if self.max_samples is not None:
+            all_samples = all_samples[: self.max_samples]
 
-        # Extract label - look for person detection
-        label = 0  # Default to "no_person"
+        # Apply subset after max_samples
+        if self.subset < 1.0:
+            subset_size = int(len(all_samples) * self.subset)
+            all_samples = all_samples[:subset_size]
 
-        # Try different label fields and heuristics
-        if "objects" in sample and sample["objects"]:
-            # COCO-style annotations
-            categories = sample["objects"].get("category", [])
-            if isinstance(categories, list):
-                # Look for person category (usually category 1 in COCO)
-                if 1 in categories or "person" in str(categories).lower():
-                    label = 1
-        elif "label" in sample:
-            # Direct label field
-            if isinstance(sample["label"], (int, float)):
-                label = int(sample["label"]) % 2  # Ensure binary
-            elif "person" in str(sample["label"]).lower():
-                label = 1
-        elif "category" in sample:
-            if "person" in str(sample["category"]).lower():
-                label = 1
-
-        return image, label
-
-    def _process_huggingface_dataset(self, dataset):
-        """Process HuggingFace dataset to extract images and labels."""
-        if self.streaming:
-            return map(self._process_sample, dataset)
-        else:
-            return [self._process_sample(sample) for sample in dataset]
+        return all_samples
 
     def __len__(self) -> int:
         """Return dataset length."""
-        if self.streaming:
-            # For large streaming datasets, use a reasonable estimate
-            return 10000  # Large datasets use streaming
-        else:
-            return len(self.samples)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         """Get a single sample from the dataset."""
-        if self.streaming:
-            # This should rarely happen now since small datasets are converted to non-streaming
-            raise NotImplementedError(
-                "Streaming mode with indexing not supported for large datasets. Use non-streaming mode."
+        if idx >= len(self.samples):
+            raise IndexError(
+                f"Index {idx} out of range for dataset of size {len(self.samples)}"
             )
-        else:
-            if idx >= len(self.samples):
-                raise IndexError(
-                    f"Index {idx} out of range for dataset of size {len(self.samples)}"
-                )
-            image, label = self.samples[idx]
+
+        image, label = self.samples[idx]
 
         # Apply transforms
         if isinstance(image, Image.Image):
             image_tensor = self.transform(image)
         else:
-            # Handle edge cases where image might not be PIL
-            image_tensor = torch.randn(3, *self.target_size)  # Fallback tensor
+            # Convert numpy array to PIL Image if needed
+            if isinstance(image, np.ndarray):
+                image = Image.fromarray(image)
+                image_tensor = self.transform(image)
+            else:
+                # Fallback
+                image_tensor = torch.randn(3, *self.target_size)
 
         return image_tensor, label
+
+    def get_class_distribution(self) -> dict:
+        """Get the distribution of classes in the dataset."""
+        if not hasattr(self, "_class_distribution"):
+            distribution = {}
+            for _, label in self.samples:
+                class_name = self.class_names[label]
+                distribution[class_name] = distribution.get(class_name, 0) + 1
+            self._class_distribution = distribution
+        return self._class_distribution

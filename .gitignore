@@ -11,5 +11,6 @@ easy_train_data
 checkpoints/
 wandb/
 lightning_logs/
+data/raw/
 
 .DS_Store

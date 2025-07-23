@@ -152,8 +152,8 @@ struct DynamicGrid {
             for (int w = 0; w < grid_size; ++w) {
                 uint64_t pixel_features = 0;
                 for (int c = 0; c < std::min(num_channels, 64); ++c) {
-                    int idx = (h * grid_size + w) * num_channels + c;
-                    if (static_cast<float>(conv_data[idx]) > threshold) {
+                    int feature_idx = (h * grid_size + w) * num_channels + c;
+                    if (static_cast<float>(conv_data[feature_idx]) > threshold) {
                         pixel_features |= (1ULL << c);
                     }
                 }
@@ -181,9 +181,10 @@ struct DynamicGrid {
                     // (This is a fallback - for efficiency with large channel counts,
                     // consider using a different data structure)
                     for (int c = 0; c < num_channels; ++c) {
-                        int idx = (h * grid_size + w) * num_channels + c;
+                        int feature_idx = (h * grid_size + w) * num_channels + c;
                         // Note: This needs the original conv data, so this path needs refactoring
                         // For now, assume we stick to <= 64 channels for uint64 efficiency
+                        (void)feature_idx;  // Suppress unused variable warning
                     }
                 }
             }
@@ -241,10 +242,20 @@ struct FeatureTransformer {
     // Forward pass with sparse input
     void forward(const std::vector<int>& active_features, int16_t* output) const;
     
-    // Efficient accumulator update
+    // Chess engine-style incremental updates (SIMD optimized)
+    void add_feature(int feature_idx, int16_t* accumulator) const;
+    void remove_feature(int feature_idx, int16_t* accumulator) const;
+    void move_feature(int from_idx, int to_idx, int16_t* accumulator) const;
+    
+    // Efficient accumulator update (batch operations)
     void update_accumulator(const std::vector<int>& added_features,
                            const std::vector<int>& removed_features,
                            int16_t* accumulator) const;
+    
+    // SIMD-optimized implementations
+    void add_feature_simd(int feature_idx, int16_t* accumulator) const;
+    void remove_feature_simd(int feature_idx, int16_t* accumulator) const;
+    void forward_simd(const std::vector<int>& active_features, int16_t* output) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -312,6 +323,13 @@ private:
     mutable std::unique_ptr<DynamicGrid> feature_grid_;
     mutable AlignedVector<int16_t> ft_output_;
     mutable std::vector<int> active_features_;
+    
+    // Chess engine-style accumulator management
+    mutable AlignedVector<int16_t> accumulator_;          // Persistent accumulator state
+    mutable AlignedVector<int16_t> backup_accumulator_;   // For backup/restore
+    mutable std::vector<int> last_active_features_;       // Track feature changes
+    mutable bool accumulator_dirty_;                      // Needs full refresh
+    mutable bool incremental_enabled_;                    // Enable incremental updates
 
 public:
     NNUEEvaluator();
@@ -322,6 +340,19 @@ public:
     
     // Evaluate image: RGB float[H*W*3] -> score
     float evaluate(const float* image_data, int image_h = 96, int image_w = 96, int layer_stack_index = 0) const;
+    
+    // Chess engine-style incremental evaluation
+    float evaluate_incremental(const std::vector<int>& current_features, int layer_stack_index = 0) const;
+    
+    // Accumulator management (like chess engine)
+    void save_accumulator() const;                        // Backup current state
+    void restore_accumulator() const;                     // Restore from backup
+    void refresh_accumulator(const std::vector<int>& features) const;  // Full refresh
+    void update_features(const std::vector<int>& added, const std::vector<int>& removed) const;
+    
+    // Enable/disable incremental updates
+    void enable_incremental(bool enable = true) const { incremental_enabled_ = enable; }
+    void mark_dirty() const { accumulator_dirty_ = true; }
     
     // Get model info
     int get_num_layer_stacks() const { return num_ls_buckets_; }
@@ -336,10 +367,25 @@ public:
     // Utility functions
     static std::vector<int> extract_features(const int8_t* grid_data, 
                                            int grid_size, int num_channels,
-                                           float threshold = 0.0f);
+                                           float threshold = 0.0f) {
+        std::vector<int> active_features;
+        
+        for (int h = 0; h < grid_size; ++h) {
+            for (int w = 0; w < grid_size; ++w) {
+                for (int c = 0; c < num_channels; ++c) {
+                    int feature_idx = (h * grid_size + w) * num_channels + c;
+                    if (static_cast<float>(grid_data[feature_idx]) > threshold) {
+                        active_features.push_back(feature_idx);
+                    }
+                }
+            }
+        }
+        
+        return active_features;
+    }
 };
 
-// Utility functions for SIMD operations
+// Forward declarations for SIMD implementations
 namespace simd {
     // Check CPU capabilities
     bool has_avx2();
@@ -383,6 +429,14 @@ namespace simd {
     void dense_forward_scalar(const int16_t* input, const int8_t* weights,
                              const int32_t* biases, int8_t* output,
                              int input_size, int output_size, float scale);
+                             
+    // Chess engine-style incremental updates (SIMD optimized)
+    void add_feature_avx2(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
+    void remove_feature_avx2(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
+    void add_feature_neon(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
+    void remove_feature_neon(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
+    void add_feature_scalar(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
+    void remove_feature_scalar(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
 }
 
 } // namespace nnue

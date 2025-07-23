@@ -1,40 +1,48 @@
 """Data loading and dataset utilities for NNUE-Vision.
 
 This package provides:
-- Visual Wake Words dataset loading
+- Generic computer vision dataset loading (CIFAR-10, CIFAR-100, etc.)
 - Data preprocessing and transformations
 - Dataset inspection and visualization tools
 
 Example usage:
-    from data import create_data_loaders, DatasetInspector
+    from data import create_data_loaders, get_dataset_info
 
-    # Create data loaders
+    # Create data loaders for CIFAR-10
     train_loader, val_loader, test_loader = create_data_loaders(
+        dataset_name="cifar10",
         batch_size=32,
         max_samples_per_split=100
     )
 
-    # Inspect dataset
-    inspector = DatasetInspector()
-    inspector.print_overview()
-    inspector.show_sample_images()
+    # Get dataset information
+    info = get_dataset_info("cifar10")
+    print(f"Classes: {info['classes']}")
+
+    # Binary classification example (vehicles vs non-vehicles)
+    binary_config = {
+        'positive_classes': ['airplane', 'automobile', 'ship', 'truck']
+    }
+    train_loader, val_loader, test_loader = create_data_loaders(
+        dataset_name="cifar10",
+        binary_classification=binary_config
+    )
 """
 
-# Re‐export DatasetInspector for convenience
-from .dataset_inspector import DatasetInspector
-from .datasets import VWW_CLASS_NAMES, VisualWakeWordsDataset
+# Direct imports without circular dependency
+from .datasets import (AVAILABLE_DATASETS, GenericVisionDataset,
+                       get_dataset_info)
 from .loaders import (create_data_loaders, get_dataset_stats,
                       print_dataset_stats)
 
 __all__ = [
     # Dataset classes
-    "VisualWakeWordsDataset",
+    "GenericVisionDataset",
     # Data loaders
     "create_data_loaders",
     # Utilities
     "get_dataset_stats",
     "print_dataset_stats",
-    "VWW_CLASS_NAMES",
-    # Inspector
-    "DatasetInspector",
+    "get_dataset_info",
+    "AVAILABLE_DATASETS",
 ]

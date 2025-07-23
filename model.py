@@ -1,21 +1,23 @@
 """
-Original NNUE Quantization Implementation
+Original NNUE Quantization Implementation for Computer Vision
 
 This module implements the quantization scheme from the original NNUE paper:
 "Efficiently Updatable Neural-Network-based Evaluation Functions for Computer Shogi"
-by Yu Nasu (2018)
+by Yu Nasu (2018), adapted for computer vision tasks.
 
 Key differences from standard quantization:
 - 16-bit weights for feature transformer (W₁)
 - 8-bit weights for subsequent layers (W₂, W₃, W₄)
 - Optimized for CPU SIMD instructions (AVX2)
 - Supports difference-based updates
+- Adapted for image classification tasks
 """
 
 from dataclasses import dataclass
 from typing import Optional
 
 import pytorch_lightning as pl
+import ranger21
 import torch
 from torch import nn
 
@@ -86,26 +88,17 @@ class FeatureTransformer(nn.Module):
         # Initialize output tensor
         output = self.bias.unsqueeze(0).expand(batch_size, -1).clone()
 
-        # Add contributions from active features
+        # Standard PyTorch implementation
         for b in range(batch_size):
-            # Get valid indices (non-negative)
             valid_mask = feature_indices[b] >= 0
             if valid_mask.any():
                 valid_indices = feature_indices[b][valid_mask]
                 valid_values = feature_values[b][valid_mask]
-
-                # Accumulate weighted features
-                feature_weights = self.weight[valid_indices]  # [num_valid, output_size]
-                weighted_features = feature_weights * valid_values.unsqueeze(
-                    -1
-                )  # [num_valid, output_size]
+                feature_weights = self.weight[valid_indices]
+                weighted_features = feature_weights * valid_values.unsqueeze(-1)
                 output[b] += weighted_features.sum(dim=0)
 
         return output
-
-
-def get_parameters(layers):
-    return [p for layer in layers for p in layer.parameters()]
 
 
 class LayerStacks(nn.Module):
@@ -238,18 +231,23 @@ class LayerStacks(nn.Module):
                 yield l1, l2, output
 
 
+def get_parameters(layers):
+    return [p for layer in layers for p in layer.parameters()]
+
+
 class NNUE(pl.LightningModule):
     """
-    Visual Wake Words NNUE model with configurable architecture for maximum efficiency.
+    NNUE model for computer vision with configurable architecture for maximum efficiency.
 
-    Processes images through visual wake words model to binary features,
-    then through NNUE architecture for final evaluation.
+    Processes images through convolutional feature extraction to binary features,
+    then through NNUE architecture for final classification.
 
     Features:
     - Configurable feature space and layer sizes for testing and deployment
-    - Visual Wake Words frontend (Conv3x3, stride=3) - aggressive scaling
+    - Convolutional frontend with aggressive spatial downsampling
     - Quantization-ready architecture for C++ conversion
     - Bucketed layer stacks for efficiency
+    - Supports various computer vision datasets (CIFAR-10, CIFAR-100, etc.)
     """
 
     def __init__(
@@ -304,8 +302,10 @@ class NNUE(pl.LightningModule):
         )
         self.hardtanh = nn.Hardtanh(min_val=-1.0, max_val=1.0)
 
-        # Single feature transformer
+        # Single feature transformer (standard PyTorch)
         self.input = FeatureTransformer(self.feature_set.num_features, l1_size)
+
+        # Standard layer stacks (no optimizations)
         self.layer_stacks = LayerStacks(num_ls_buckets, l1_size, l2_size, l3_size)
 
         self.loss_params = loss_params
@@ -595,7 +595,9 @@ class NNUE(pl.LightningModule):
             loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
         loss = loss.mean()
 
-        self.log(loss_type, loss)
+        # Only log if trainer is available (prevents warnings during testing)
+        if hasattr(self, "_trainer") and self._trainer is not None:
+            self.log(loss_type, loss)
 
         return loss
 
@@ -613,8 +615,6 @@ class NNUE(pl.LightningModule):
 
         # Try to use ranger21 if available, otherwise fall back to Adam
         try:
-            import ranger21
-
             train_params = [
                 {"params": [self.conv.weight], "lr": LR},
                 {"params": [self.conv.bias], "lr": LR},

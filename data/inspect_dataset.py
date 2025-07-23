@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Visual Wake Words Dataset Inspector
+Generic Dataset Inspector
 
-A comprehensive tool for exploring and analyzing Visual Wake Words datasets.
-Provides statistics, visualization, and interactive exploration capabilities.
+A comprehensive tool for exploring and analyzing computer vision datasets.
+Supports CIFAR-10, CIFAR-100, and other torchvision datasets.
 
 Usage:
-    python inspect_dataset.py                    # Interactive mode
-    python inspect_dataset.py --stats            # Print statistics only
-    python inspect_dataset.py --samples 10       # Show sample images
-    python inspect_dataset.py --real             # Use real VWW dataset
+    python inspect_dataset.py                            # Interactive mode with CIFAR-10
+    python inspect_dataset.py --dataset cifar100         # Use CIFAR-100
+    python inspect_dataset.py --stats                    # Print statistics only
+    python inspect_dataset.py --samples 10               # Show sample images
+    python inspect_dataset.py --binary-vehicles          # Binary classification example
 """
 
 import argparse
@@ -22,46 +23,56 @@ import numpy as np
 import torch
 from matplotlib.widgets import Button, Slider
 
-from data import create_data_loaders, get_dataset_stats, print_dataset_stats
-from data.datasets import VWW_CLASS_NAMES
+# Import from data module
+from data import (AVAILABLE_DATASETS, create_data_loaders, get_dataset_info,
+                  get_dataset_stats, print_dataset_stats)
 from data.loaders import calculate_dataset_statistics, print_loader_statistics
 
 
 class DatasetInspector:
     """Interactive dataset inspector with visualization capabilities."""
 
-    def __init__(self, dataset_type: str = "synthetic", batch_size: int = 16):
+    def __init__(
+        self,
+        dataset_name: str = "cifar10",
+        batch_size: int = 16,
+        binary_classification: Optional[dict] = None,
+    ):
         """
         Initialize the dataset inspector.
 
         Args:
-            dataset_type: Type of dataset ('synthetic' or 'real')
+            dataset_name: Name of dataset to inspect ('cifar10', 'cifar100')
             batch_size: Batch size for data loading
+            binary_classification: Optional binary classification config
         """
-        self.dataset_type = dataset_type
+        self.dataset_name = dataset_name
         self.batch_size = batch_size
+        self.binary_classification = binary_classification
 
-        print(
-            f"🔍 Initializing Dataset Inspector for {dataset_type} Visual Wake Words..."
-        )
+        # Get dataset info
+        self.dataset_info = get_dataset_info(dataset_name)
+
+        print(f"🔍 Initializing Dataset Inspector for {self.dataset_info['name']}...")
+        if binary_classification:
+            positive_classes = binary_classification.get("positive_classes", [])
+            print(f"  Binary classification: {positive_classes} → positive")
 
         # Create data loaders
         try:
             self.train_loader, self.val_loader, self.test_loader = create_data_loaders(
-                dataset_type=dataset_type,
+                dataset_name=dataset_name,
                 batch_size=batch_size,
                 num_workers=0,  # Use 0 for easier debugging
-                subset=(
-                    0.1 if dataset_type == "real" else 1.0
-                ),  # Use subset for real data to save time
+                subset=0.05,  # Use small subset for faster loading during inspection
+                binary_classification=binary_classification,
             )
             print("✅ Data loaders created successfully!")
         except Exception as e:
             print(f"❌ Error creating data loaders: {e}")
-            if dataset_type == "real":
-                print(
-                    "💡 Try installing tensorflow-datasets: pip install tensorflow-datasets"
-                )
+            print(
+                f"💡 Please check that the {self.dataset_info['name']} dataset is available"
+            )
             sys.exit(1)
 
         # Cache for loaded batches
@@ -76,21 +87,30 @@ class DatasetInspector:
     def print_overview(self):
         """Print a comprehensive overview of the dataset."""
         print("\n" + "=" * 80)
-        print("🔍 VISUAL WAKE WORDS DATASET INSPECTOR")
+        print(f"🔍 {self.dataset_info['name'].upper()} DATASET INSPECTOR")
         print("=" * 80)
 
         # Dataset statistics
-        print_dataset_stats(self.dataset_type)
+        print_dataset_stats(self.dataset_name)
 
         # Data loader statistics
         print("📊 Computing data loader statistics...")
-        train_stats = calculate_dataset_statistics(self.train_loader)
-        print_loader_statistics(train_stats)
+        try:
+            train_stats = calculate_dataset_statistics(self.train_loader)
+            print_loader_statistics(train_stats)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not compute detailed statistics: {repr(e)}")
+            print(f"    Error type: {type(e).__name__}")
+            print("📊 Basic statistics will be shown instead")
 
         # Quick sample check
         print("🖼️  Sample data check:")
-        train_batch = self._get_batch("train")
-        images, labels = train_batch
+        try:
+            train_batch = self._get_batch("train")
+            images, labels = train_batch
+        except Exception as e:
+            print(f"❌ Error getting batch: {repr(e)} (type: {type(e).__name__})")
+            return
 
         print(f"  • Batch shape: {images.shape}")
         print(f"  • Label shape: {labels.shape}")
@@ -104,8 +124,15 @@ class DatasetInspector:
         # Class distribution in current batch
         unique_labels, counts = torch.unique(labels, return_counts=True)
         print(f"  • Batch class distribution:")
+
+        # Get class names from the dataset
+        if hasattr(self.train_loader.dataset, "class_names"):
+            class_names = self.train_loader.dataset.class_names
+        else:
+            class_names = self.dataset_info["classes"]
+
         for label, count in zip(unique_labels, counts):
-            class_name = VWW_CLASS_NAMES[label.item()]
+            class_name = class_names[label.item()]
             print(f"    - {class_name}: {count.item()} samples")
 
     def _get_batch(self, split: str) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -144,8 +171,7 @@ class DatasetInspector:
         grid_size = int(np.ceil(np.sqrt(num_samples)))
         fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
         fig.suptitle(
-            f"{self.dataset_type.title()} Visual Wake Words - {split.title()} Split",
-            fontsize=16,
+            f"{self.dataset_info['name']} - {split.title()} Split", fontsize=16
         )
 
         # Flatten axes for easier indexing
@@ -154,6 +180,12 @@ class DatasetInspector:
         else:
             axes = axes.flatten()
 
+        # Get class names
+        if hasattr(self.train_loader.dataset, "class_names"):
+            class_names = self.train_loader.dataset.class_names
+        else:
+            class_names = self.dataset_info["classes"]
+
         for i in range(grid_size * grid_size):
             ax = axes[i]
 
@@ -161,7 +193,7 @@ class DatasetInspector:
                 # Get image and label
                 img_tensor = images[i]
                 label = labels[i].item()
-                class_name = VWW_CLASS_NAMES[label]
+                class_name = class_names[label]
 
                 # Denormalize image for display
                 img_display = self._denormalize_image(img_tensor)
@@ -209,10 +241,7 @@ class DatasetInspector:
         fig, ((ax_img, ax_hist), (ax_controls, ax_info)) = plt.subplots(
             2, 2, figsize=(15, 10)
         )
-        fig.suptitle(
-            f"Interactive {self.dataset_type.title()} Visual Wake Words Explorer",
-            fontsize=16,
-        )
+        fig.suptitle(f"Interactive {self.dataset_info['name']} Explorer", fontsize=16)
 
         # Initial display
         self._update_display(fig, ax_img, ax_hist, ax_info)
@@ -233,7 +262,14 @@ class DatasetInspector:
 
         img_tensor = images[self.current_sample_idx]
         label = labels[self.current_sample_idx].item()
-        class_name = VWW_CLASS_NAMES[label]
+
+        # Get class names
+        if hasattr(self.train_loader.dataset, "class_names"):
+            class_names = self.train_loader.dataset.class_names
+        else:
+            class_names = self.dataset_info["classes"]
+
+        class_name = class_names[label]
 
         # Clear axes
         ax_img.clear()
@@ -260,7 +296,7 @@ class DatasetInspector:
         ax_info.axis("off")
         info_text = f"""
 Dataset Info:
-• Type: {self.dataset_type.title()}
+• Dataset: {self.dataset_info['name']}
 • Split: {self.current_split.title()}
 • Sample: {self.current_sample_idx + 1}/{len(images)}
 • Class: {class_name} (label={label})
@@ -276,7 +312,7 @@ Current Batch:
         # Add class distribution
         unique_labels, counts = torch.unique(labels, return_counts=True)
         for lbl, count in zip(unique_labels, counts):
-            class_nm = VWW_CLASS_NAMES[lbl.item()]
+            class_nm = class_names[lbl.item()]
             percentage = count.item() / len(labels) * 100
             info_text += f"  - {class_nm}: {count.item()} ({percentage:.1f}%)\n"
 
@@ -406,22 +442,25 @@ Keyboard shortcuts:
 def main():
     """Main entry point for the dataset inspector."""
     parser = argparse.ArgumentParser(
-        description="Visual Wake Words Dataset Inspector",
+        description="Generic Computer Vision Dataset Inspector",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+Available datasets: {', '.join(AVAILABLE_DATASETS.keys())}
+
 Examples:
-  python inspect_dataset.py                    # Interactive mode with synthetic data
-  python inspect_dataset.py --real             # Interactive mode with real data  
-  python inspect_dataset.py --stats            # Show statistics only
-  python inspect_dataset.py --samples 16       # Show 16 sample images
-  python inspect_dataset.py --real --samples 8 # Real data with 8 samples
+  python inspect_dataset.py                            # Interactive mode with CIFAR-10
+  python inspect_dataset.py --dataset cifar100         # Use CIFAR-100
+  python inspect_dataset.py --stats                    # Show statistics only  
+  python inspect_dataset.py --samples 16               # Show 16 sample images
+  python inspect_dataset.py --binary-vehicles          # Binary classification demo
         """,
     )
 
     parser.add_argument(
-        "--real",
-        action="store_true",
-        help="Use real Visual Wake Words dataset (requires tensorflow-datasets)",
+        "--dataset",
+        choices=list(AVAILABLE_DATASETS.keys()),
+        default="cifar10",
+        help="Dataset to inspect (default: cifar10)",
     )
     parser.add_argument(
         "--stats",
@@ -444,16 +483,33 @@ Examples:
         default="train",
         help="Dataset split to use for samples (default: train)",
     )
+    parser.add_argument(
+        "--no-display",
+        action="store_true",
+        help="Skip matplotlib display (useful for testing or headless environments)",
+    )
+    parser.add_argument(
+        "--binary-vehicles",
+        action="store_true",
+        help="Demonstrate binary classification (vehicles vs non-vehicles for CIFAR-10)",
+    )
 
     args = parser.parse_args()
 
-    # Determine dataset type
-    dataset_type = "real" if args.real else "synthetic"
+    # Setup binary classification if requested
+    binary_classification = None
+    if args.binary_vehicles and args.dataset == "cifar10":
+        binary_classification = {
+            "positive_classes": ["airplane", "automobile", "ship", "truck"]
+        }
+        print("🚗 Using binary classification: vehicles vs non-vehicles")
 
     try:
         # Create inspector
         inspector = DatasetInspector(
-            dataset_type=dataset_type, batch_size=args.batch_size
+            dataset_name=args.dataset,
+            batch_size=args.batch_size,
+            binary_classification=binary_classification,
         )
 
         # Handle different modes
@@ -463,10 +519,21 @@ Examples:
         elif args.samples:
             # Sample display mode
             inspector.print_overview()
-            inspector.show_sample_images(num_samples=args.samples, split=args.split)
+            if not args.no_display:
+                inspector.show_sample_images(num_samples=args.samples, split=args.split)
+            else:
+                print(
+                    f"📊 Would display {args.samples} sample images from {args.split} split (skipped due to --no-display)"
+                )
         else:
             # Interactive mode
             inspector.print_overview()
+
+            if args.no_display:
+                print(
+                    "📊 Interactive mode would launch GUI (skipped due to --no-display)"
+                )
+                return
 
             print("\n" + "=" * 60)
             print("🎮 INTERACTIVE MODE")
