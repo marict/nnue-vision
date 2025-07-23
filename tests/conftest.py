@@ -93,182 +93,182 @@ def loss_params():
 
 
 @pytest.fixture
-def sample_image_batch(device):
+def sample_image_batch(_device):
     """Return a sample batch of image data for NNUE model."""
     batch_size = 4
 
     # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=device)
+    images = torch.randn(batch_size, 3, 96, 96, device=_device)
 
     # Random targets and scores for loss computation
-    targets = torch.rand(batch_size, 1, device=device)  # Between 0 and 1
-    scores = torch.randn(batch_size, 1, device=device) * 100  # Search scores
+    targets = torch.rand(batch_size, 1, device=_device)  # Between 0 and 1
+    scores = torch.randn(batch_size, 1, device=_device) * 100  # Search scores
 
     # Random layer stack indices (bucket selection)
-    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=device)
+    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=_device)
 
     return (images, targets, scores, layer_stack_indices)
 
 
 @pytest.fixture
-def small_image_batch(device):
+def small_image_batch(_device):
     """Return a smaller sample batch for faster testing."""
     batch_size = 2
 
     # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=device)
+    images = torch.randn(batch_size, 3, 96, 96, device=_device)
 
-    targets = torch.rand(batch_size, 1, device=device)
-    scores = torch.randn(batch_size, 1, device=device) * 50
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+    targets = torch.rand(batch_size, 1, device=_device)
+    scores = torch.randn(batch_size, 1, device=_device) * 50
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
     return (images, targets, scores, layer_stack_indices)
 
 
 @pytest.fixture
-def tiny_image_batch(device):
+def tiny_image_batch(_device):
     """Return the smallest batch for the fastest testing."""
     batch_size = 2
 
     # Generate random 96x96 RGB images
-    images = torch.randn(batch_size, 3, 96, 96, device=device)
+    images = torch.randn(batch_size, 3, 96, 96, device=_device)
 
-    targets = torch.rand(batch_size, 1, device=device)
-    scores = torch.randn(batch_size, 1, device=device) * 20
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+    targets = torch.rand(batch_size, 1, device=_device)
+    scores = torch.randn(batch_size, 1, device=_device) * 20
+    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
     return (images, targets, scores, layer_stack_indices)
 
 
 @pytest.fixture
-def sample_sparse_batch(grid_feature_set, device):
+def sample_sparse_batch(_grid_feature_set, _device):
     """Return a sample batch of sparse feature data for testing internal components."""
     batch_size = 4
     max_features = 32  # Maximum number of active features per sample
 
     # Generate random feature indices (some samples might have fewer features)
     feature_indices = torch.randint(
-        0, grid_feature_set.num_features, (batch_size, max_features), device=device
+        0, _grid_feature_set.num_features, (batch_size, max_features), device=_device
     )
 
     # Set some indices to -1 to simulate variable-length sparse features
     mask = torch.rand(batch_size, max_features) < 0.7  # 70% of features are active
-    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
 
     # Feature values (typically 1.0 for active features)
-    feature_values = torch.ones(batch_size, max_features, device=device)
+    feature_values = torch.ones(batch_size, max_features, device=_device)
 
     return (feature_indices, feature_values)
 
 
 @pytest.fixture
-def small_sparse_batch(small_grid_feature_set, device):
+def small_sparse_batch(_small_grid_feature_set, _device):
     """Return a smaller sample batch for faster testing of internal components."""
     batch_size = 2
     max_features = 16
 
     feature_indices = torch.randint(
         0,
-        small_grid_feature_set.num_features,
+        _small_grid_feature_set.num_features,
         (batch_size, max_features),
-        device=device,
+        device=_device,
     )
 
     mask = torch.rand(batch_size, max_features) < 0.8
-    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
 
-    feature_values = torch.ones(batch_size, max_features, device=device)
+    feature_values = torch.ones(batch_size, max_features, device=_device)
 
     return (feature_indices, feature_values)
 
 
 @pytest.fixture
-def tiny_sparse_batch(tiny_grid_feature_set, device):
+def tiny_sparse_batch(_tiny_grid_feature_set, _device):
     """Return the smallest sparse batch for fastest testing."""
     batch_size = 2
     max_features = 8
 
     feature_indices = torch.randint(
         0,
-        tiny_grid_feature_set.num_features,
+        _tiny_grid_feature_set.num_features,
         (batch_size, max_features),
-        device=device,
+        device=_device,
     )
 
     mask = torch.rand(batch_size, max_features) < 0.8
-    feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+    feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(_device)
 
-    feature_values = torch.ones(batch_size, max_features, device=device)
+    feature_values = torch.ones(batch_size, max_features, device=_device)
 
     return (feature_indices, feature_values)
 
 
 @pytest.fixture
-def trained_nnue_model(small_nnue_model, device):
+def trained_nnue_model(_small_nnue_model, _device):
     """Return an NNUE model that has been trained for a few steps."""
-    small_nnue_model.to(device)
-    small_nnue_model.train()
+    _small_nnue_model.to(_device)
+    _small_nnue_model.train()
 
     # Create synthetic training data
     batch_size = 4
 
-    optimizer = torch.optim.Adam(small_nnue_model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(_small_nnue_model.parameters(), lr=1e-3)
 
     # Train for a few steps
     for step in range(3):
         # Generate synthetic image batch
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets = torch.rand(batch_size, 1, device=device)
-        scores = torch.randn(batch_size, 1, device=device) * 50
-        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        targets = torch.rand(batch_size, 1, device=_device)
+        scores = torch.randn(batch_size, 1, device=_device) * 50
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
         batch = (images, targets, scores, layer_stack_indices)
 
         # Training step
-        loss = small_nnue_model.training_step(batch, step)
+        loss = _small_nnue_model.training_step(batch, step)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    return small_nnue_model
+    return _small_nnue_model
 
 
 @pytest.fixture
-def trained_tiny_model(tiny_nnue_model, device):
+def trained_tiny_model(_tiny_nnue_model, _device):
     """Return a tiny NNUE model that has been trained for a few steps."""
-    tiny_nnue_model.to(device)
-    tiny_nnue_model.train()
+    _tiny_nnue_model.to(_device)
+    _tiny_nnue_model.train()
 
     # Create synthetic training data
     batch_size = 2
 
-    optimizer = torch.optim.Adam(tiny_nnue_model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(_tiny_nnue_model.parameters(), lr=1e-3)
 
     # Train for a few steps
     for step in range(2):
         # Generate synthetic image batch
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets = torch.rand(batch_size, 1, device=device)
-        scores = torch.randn(batch_size, 1, device=device) * 20
-        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        targets = torch.rand(batch_size, 1, device=_device)
+        scores = torch.randn(batch_size, 1, device=_device) * 20
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
         batch = (images, targets, scores, layer_stack_indices)
 
         # Training step
-        loss = tiny_nnue_model.training_step(batch, step)
+        loss = _tiny_nnue_model.training_step(batch, step)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    return tiny_nnue_model
+    return _tiny_nnue_model
 
 
 @pytest.fixture
-def temp_model_path(tmp_path):
+def temp_model_path(_tmp_path):
     """Return a temporary path for saving models."""
-    return tmp_path / "test_nnue_model.pt"
+    return _tmp_path / "test_nnue_model.pt"
 
 
 # Simple CNN model for dataset testing (not a legacy shim)

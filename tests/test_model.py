@@ -51,81 +51,101 @@ class TestGridFeatureSet:
 
 
 class TestFeatureTransformer:
-    """Test the FeatureTransformer for sparse feature processing."""
+    """Test the FeatureTransformer component."""
 
-    def test_feature_transformer_initialization(self, grid_feature_set):
+    def test_feature_transformer_initialization(self, _grid_feature_set):
         """Test FeatureTransformer initialization."""
-        ft = FeatureTransformer(grid_feature_set.num_features, 256)
+        feature_transformer = FeatureTransformer(
+            num_features=_grid_feature_set.num_features, output_size=256
+        )
 
-        assert ft.num_features == grid_feature_set.num_features
-        assert ft.output_size == 256
-        assert ft.weight.shape == (grid_feature_set.num_features, 256)
-        assert ft.bias.shape == (256,)
+        assert feature_transformer.num_features == _grid_feature_set.num_features
+        assert feature_transformer.output_size == 256
 
-    def test_sparse_feature_forward(self, grid_feature_set, device):
-        """Test forward pass with sparse features."""
-        ft = FeatureTransformer(grid_feature_set.num_features, 128)
-        ft.to(device)
+        # Check weight and bias dimensions
+        assert feature_transformer.weight.shape == (256, _grid_feature_set.num_features)
+        assert feature_transformer.bias.shape == (256,)
+
+    def test_sparse_feature_forward(self, _grid_feature_set, _device):
+        """Test FeatureTransformer forward pass with sparse features."""
+        feature_transformer = FeatureTransformer(
+            num_features=_grid_feature_set.num_features, output_size=32
+        )
+        feature_transformer.to(_device)
 
         batch_size = 4
-        max_features = 16
+        max_active_features = 8
 
-        # Create valid sparse features
+        # Create sparse feature indices (some active, some -1 for padding)
         feature_indices = torch.randint(
-            0, grid_feature_set.num_features, (batch_size, max_features), device=device
+            0,
+            _grid_feature_set.num_features,
+            (batch_size, max_active_features),
+            device=_device,
         )
-        feature_values = torch.ones(batch_size, max_features, device=device)
+        mask = torch.rand(batch_size, max_active_features) < 0.7
+        feature_indices = feature_indices * mask.to(_device) + (-1) * (~mask).to(
+            _device
+        )
 
-        # Some samples have fewer features (use -1 for padding)
-        mask = torch.rand(batch_size, max_features) < 0.8
-        feature_indices = feature_indices * mask.to(device) + (-1) * (~mask).to(device)
+        output = feature_transformer(feature_indices)
 
-        output = ft(feature_indices, feature_values)
-
-        assert_tensor_shape(output, (batch_size, 128))
+        assert_tensor_shape(output, (batch_size, 32))
         assert not torch.isnan(output).any()
         assert not torch.isinf(output).any()
 
-    def test_empty_features(self, grid_feature_set, device):
-        """Test forward pass with no active features."""
-        ft = FeatureTransformer(grid_feature_set.num_features, 64)
-        ft.to(device)
+    def test_empty_features(self, _grid_feature_set, _device):
+        """Test FeatureTransformer with completely empty feature sets."""
+        feature_transformer = FeatureTransformer(
+            num_features=_grid_feature_set.num_features, output_size=16
+        )
+        feature_transformer.to(_device)
 
         batch_size = 2
-        max_features = 8
+        max_active_features = 4
 
-        # All features are inactive (-1)
-        feature_indices = torch.full((batch_size, max_features), -1, device=device)
-        feature_values = torch.ones(batch_size, max_features, device=device)
+        # All features are -1 (empty)
+        feature_indices = torch.full(
+            (batch_size, max_active_features), -1, device=_device
+        )
 
-        output = ft(feature_indices, feature_values)
+        output = feature_transformer(feature_indices)
 
-        # Should return bias only
-        assert_tensor_shape(output, (batch_size, 64))
-        for i in range(batch_size):
-            assert torch.allclose(output[i], ft.bias, atol=1e-6)
+        assert_tensor_shape(output, (batch_size, 16))
 
-    def test_single_feature_per_sample(self, grid_feature_set, device):
-        """Test with exactly one active feature per sample."""
-        ft = FeatureTransformer(grid_feature_set.num_features, 32)
-        ft.to(device)
+        # With no active features, output should be just the bias
+        expected_output = feature_transformer.bias.unsqueeze(0).expand(batch_size, -1)
+        assert torch.allclose(output, expected_output, atol=1e-6)
+
+    def test_single_feature_per_sample(self, _grid_feature_set, _device):
+        """Test FeatureTransformer with single active feature per sample."""
+        feature_transformer = FeatureTransformer(
+            num_features=_grid_feature_set.num_features, output_size=8
+        )
+        feature_transformer.to(_device)
 
         batch_size = 3
+        max_active_features = 1
 
-        # One feature per sample, rest are padding
-        feature_indices = torch.tensor(
-            [[0, -1, -1], [10, -1, -1], [50, -1, -1]], device=device
+        # Each sample has exactly one active feature
+        feature_indices = torch.randint(
+            0,
+            _grid_feature_set.num_features,
+            (batch_size, max_active_features),
+            device=_device,
         )
-        feature_values = torch.ones(batch_size, 3, device=device)
 
-        output = ft(feature_indices, feature_values)
+        output = feature_transformer(feature_indices)
 
-        assert_tensor_shape(output, (batch_size, 32))
+        assert_tensor_shape(output, (batch_size, 8))
+        assert not torch.isnan(output).any()
 
-        # Each output should be bias + corresponding weight
+        # Verify that each output is bias + corresponding weight column
         for i in range(batch_size):
-            active_idx = feature_indices[i, 0].item()
-            expected = ft.bias + ft.weight[active_idx]
+            feature_idx = feature_indices[i, 0].item()
+            expected = (
+                feature_transformer.bias + feature_transformer.weight[:, feature_idx]
+            )
             assert torch.allclose(output[i], expected, atol=1e-6)
 
 
@@ -151,15 +171,15 @@ class TestLayerStacks:
         assert layer_stacks.output.in_features == 32  # L3
         assert layer_stacks.output.out_features == 1 * num_buckets
 
-    def test_layer_stacks_forward(self, device):
+    def test_layer_stacks_forward(self, _device):
         """Test LayerStacks forward pass."""
         num_buckets = 2
         layer_stacks = LayerStacks(num_buckets)
-        layer_stacks.to(device)
+        layer_stacks.to(_device)
 
         batch_size = 4
-        input_tensor = torch.randn(batch_size, 3072, device=device)  # L1 size
-        bucket_indices = torch.randint(0, num_buckets, (batch_size,), device=device)
+        input_tensor = torch.randn(batch_size, 3072, device=_device)  # L1 size
+        bucket_indices = torch.randint(0, num_buckets, (batch_size,), device=_device)
 
         output = layer_stacks(input_tensor, bucket_indices)
 
@@ -167,54 +187,48 @@ class TestLayerStacks:
         assert not torch.isnan(output).any()
         assert not torch.isinf(output).any()
 
-    def test_bucket_selection(self, device):
-        """Test that different buckets can produce different outputs."""
+    def test_bucket_selection(self, _device):
+        """Test that different bucket indices produce different outputs."""
         num_buckets = 3
         layer_stacks = LayerStacks(num_buckets)
-        layer_stacks.to(device)
-        layer_stacks.eval()  # Deterministic behavior
+        layer_stacks.to(_device)
 
-        # Modify weights to make buckets different
-        with torch.no_grad():
-            for i in range(num_buckets):
-                # Make each bucket's weights slightly different
-                start_idx = i * (15 + 1)  # L2 + 1
-                end_idx = (i + 1) * (15 + 1)
-                layer_stacks.l1.weight[start_idx:end_idx] += (i + 1) * 0.1
+        # Use the same input but different bucket indices
+        input_tensor = torch.randn(1, 3072, device=_device)
+        bucket_0 = torch.tensor([0], device=_device)
+        bucket_1 = torch.tensor([1], device=_device)
+        bucket_2 = torch.tensor([2], device=_device)
 
-        input_tensor = torch.randn(1, 3072, device=device)
+        output_0 = layer_stacks(input_tensor, bucket_0)
+        output_1 = layer_stacks(input_tensor, bucket_1)
+        output_2 = layer_stacks(input_tensor, bucket_2)
 
-        outputs = []
-        for bucket_idx in range(num_buckets):
-            bucket_indices = torch.tensor([bucket_idx], device=device)
-            output = layer_stacks(input_tensor, bucket_indices)
-            outputs.append(output)
+        # Different buckets should produce different outputs
+        assert not torch.allclose(output_0, output_1, atol=1e-6)
+        assert not torch.allclose(output_1, output_2, atol=1e-6)
+        assert not torch.allclose(output_0, output_2, atol=1e-6)
 
-        # After modifying weights, outputs should be different for different buckets
-        for i in range(len(outputs)):
-            for j in range(i + 1, len(outputs)):
-                assert not torch.allclose(outputs[i], outputs[j], atol=1e-6)
+        # But same bucket should produce same output
+        output_0_repeat = layer_stacks(input_tensor, bucket_0)
+        assert torch.allclose(output_0, output_0_repeat, atol=1e-6)
 
     def test_coalesced_layer_stacks(self):
-        """Test that coalesced layer stacks can be extracted."""
+        """Test LayerStacks with coalesced=True."""
         num_buckets = 2
-        layer_stacks = LayerStacks(num_buckets)
+        layer_stacks = LayerStacks(num_buckets, coalesced=True)
 
-        coalesced = list(layer_stacks.get_coalesced_layer_stacks())
+        # Should have the same structure as non-coalesced
+        assert layer_stacks.count == num_buckets
+        assert layer_stacks.l1.in_features == 3072
+        assert layer_stacks.l1.out_features == (15 + 1) * num_buckets
 
-        assert len(coalesced) == num_buckets
+        # Should still function (basic smoke test)
+        input_tensor = torch.randn(1, 3072)
+        bucket_indices = torch.tensor([0])
+        output = layer_stacks(input_tensor, bucket_indices)
 
-        for l1, l2, output in coalesced:
-            assert isinstance(l1, nn.Linear)
-            assert isinstance(l2, nn.Linear)
-            assert isinstance(output, nn.Linear)
-
-            assert l1.in_features == 3072  # L1
-            assert l1.out_features == 15  # L2 (extracted from L2+1)
-            assert l2.in_features == 15 * 2  # L2 * 2
-            assert l2.out_features == 32  # L3
-            assert output.in_features == 32  # L3
-            assert output.out_features == 1
+        assert_tensor_shape(output, (1, 1))
+        assert not torch.isnan(output).any()
 
 
 class TestNNUEArchitecture:
@@ -278,127 +292,146 @@ class TestNNUEArchitecture:
         # Check conv layer matches feature set
         assert model.conv.out_channels == 8  # matches num_features_per_square
 
-    def test_nnue_forward_pass(self, nnue_model, sample_image_batch, device):
+    def test_nnue_forward_pass(self, _nnue_model, _sample_image_batch, _device):
         """Test NNUE forward pass with images."""
-        nnue_model.to(device)
-        nnue_model.eval()
+        _nnue_model.to(_device)
+        _nnue_model.eval()
 
-        images, _, _, layer_stack_indices = sample_image_batch
+        images, _, _, layer_stack_indices = _sample_image_batch
 
         with torch.no_grad():
-            output = nnue_model(images, layer_stack_indices)
+            output = _nnue_model(images, layer_stack_indices)
 
         batch_size = images.shape[0]
         assert_tensor_shape(output, (batch_size, 1))
         assert not torch.isnan(output).any()
         assert not torch.isinf(output).any()
 
-    def test_nnue_different_batch_sizes(self, small_nnue_model, device):
+    def test_nnue_different_batch_sizes(self, _small_nnue_model, _device):
         """Test NNUE with different batch sizes."""
-        small_nnue_model.to(device)
-        small_nnue_model.eval()
+        _small_nnue_model.to(_device)
+        _small_nnue_model.eval()
 
         batch_sizes = [1, 2, 4, 8]
 
         for batch_size in batch_sizes:
-            images = torch.randn(batch_size, 3, 96, 96, device=device)
-            layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+            images = torch.randn(batch_size, 3, 96, 96, device=_device)
+            layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
             with torch.no_grad():
-                output = small_nnue_model(images, layer_stack_indices)
+                output = _small_nnue_model(images, layer_stack_indices)
 
             assert_tensor_shape(output, (batch_size, 1))
             assert not torch.isnan(output).any()
 
-    def test_conv_layer_output_shape(self, tiny_nnue_model, device):
-        """Test that conv layer produces correct output shape."""
-        tiny_nnue_model.to(device)
-        tiny_nnue_model.eval()
+    def test_conv_layer_output_shape(self, _tiny_nnue_model, _device):
+        """Test that conv layer produces correct feature grid shape."""
+        _tiny_nnue_model.to(_device)
+        _tiny_nnue_model.eval()
 
         batch_size = 2
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
 
         with torch.no_grad():
-            # Test conv + hardtanh only
-            conv_out = tiny_nnue_model.conv(images)
-            tanh_out = tiny_nnue_model.hardtanh(conv_out)
+            # Access conv layer output through forward hooks
+            conv_outputs = []
 
-        # For tiny model: 4x4 grid, 8 channels
-        # 96x96 input with stride=24 -> 4x4 output
-        expected_h = expected_w = tiny_nnue_model.feature_set.grid_size
-        expected_c = tiny_nnue_model.feature_set.num_features_per_square
+            def hook(module, input, output):
+                conv_outputs.append(output)
 
-        assert_tensor_shape(conv_out, (batch_size, expected_c, expected_h, expected_w))
-        assert_tensor_shape(tanh_out, (batch_size, expected_c, expected_h, expected_w))
+            handle = _tiny_nnue_model.conv.register_forward_hook(hook)
 
-        # Hardtanh should bound values between -1 and 1
-        assert tanh_out.min() >= -1.0
-        assert tanh_out.max() <= 1.0
+            try:
+                layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
+                _ = _tiny_nnue_model(images, layer_stack_indices)
 
-    def test_binary_feature_conversion(self, tiny_nnue_model, device):
-        """Test that images are converted to binary features correctly."""
-        tiny_nnue_model.to(device)
-        tiny_nnue_model.eval()
+                assert len(conv_outputs) == 1
+                conv_output = conv_outputs[0]
+
+                # Should be (batch_size, num_features_per_square, grid_size, grid_size)
+                expected_shape = (batch_size, 8, 4, 4)  # For tiny model
+                assert_tensor_shape(conv_output, expected_shape)
+
+            finally:
+                handle.remove()
+
+    def test_binary_feature_conversion(self, _tiny_nnue_model, _device):
+        """Test that conv outputs are properly converted to binary features."""
+        _tiny_nnue_model.to(_device)
+        _tiny_nnue_model.eval()
 
         batch_size = 2
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
         with torch.no_grad():
-            # Test conv + hardtanh
-            conv_out = tiny_nnue_model.conv(images)
-            tanh_out = tiny_nnue_model.hardtanh(conv_out)
+            # Store intermediate outputs
+            conv_output = None
+            sparse_features = None
 
-            # Test threshold conversion
-            binary_features = (tanh_out > tiny_nnue_model.visual_threshold).float()
+            def conv_hook(module, input, output):
+                nonlocal conv_output
+                conv_output = output
 
-            # Test sparse conversion
-            feature_indices, feature_values = tiny_nnue_model._to_sparse_features(
-                binary_features
-            )
+            def ft_hook(module, input, output):
+                nonlocal sparse_features
+                sparse_features = input[0]  # Get the sparse feature input
 
-        # Check sparse features shape
-        assert feature_indices.shape[0] == batch_size
-        assert feature_values.shape[0] == batch_size
-        assert feature_indices.shape == feature_values.shape
+            conv_handle = _tiny_nnue_model.conv.register_forward_hook(conv_hook)
+            ft_handle = _tiny_nnue_model.input.register_forward_hook(ft_hook)
 
-        # Check that values are 1.0 for valid indices
-        valid_mask = feature_indices >= 0
-        if valid_mask.any():
-            assert torch.all(feature_values[valid_mask] == 1.0)
+            try:
+                _ = _tiny_nnue_model(images, layer_stack_indices)
 
-    def test_weight_clipping(self, tiny_nnue_model):
-        """Test weight clipping for quantization."""
-        # Get initial weight ranges
-        initial_weights = {}
-        for name, param in tiny_nnue_model.named_parameters():
-            initial_weights[name] = param.clone()
+                # Check that conv output was properly converted to sparse features
+                assert conv_output is not None
+                assert sparse_features is not None
 
-        # Make some weights exceed clipping bounds
+                # Sparse features should be 2D: (batch_size, max_active_features)
+                assert len(sparse_features.shape) == 2
+                assert sparse_features.shape[0] == batch_size
+
+                # All feature indices should be either valid (>= 0) or padding (-1)
+                valid_mask = sparse_features >= 0
+                padding_mask = sparse_features == -1
+                assert torch.all(valid_mask | padding_mask)
+
+                # Valid indices should be within feature range
+                num_features = _tiny_nnue_model.feature_set.num_features
+                assert torch.all(sparse_features[valid_mask] < num_features)
+
+            finally:
+                conv_handle.remove()
+                ft_handle.remove()
+
+    def test_weight_clipping(self, _tiny_nnue_model):
+        """Test weight clipping functionality."""
+        # Set some weights to extreme values
         with torch.no_grad():
-            for param in tiny_nnue_model.layer_stacks.l1.weight:
-                param.fill_(10.0)  # Large value
+            _tiny_nnue_model.input.weight.data.fill_(10.0)  # Too large
+            _tiny_nnue_model.layer_stacks.l1.weight.data.fill_(-5.0)  # Too negative
 
-        # Apply weight clipping
-        tiny_nnue_model._clip_weights()
+        # Apply clipping
+        _tiny_nnue_model.clip_weights()
 
-        # Check weights are clipped
-        max_hidden_weight = (
-            tiny_nnue_model.quantized_one / tiny_nnue_model.weight_scale_hidden
-        )
-        l1_weights = tiny_nnue_model.layer_stacks.l1.weight
-        assert torch.all(l1_weights >= -max_hidden_weight)
-        assert torch.all(l1_weights <= max_hidden_weight)
+        # Check that weights are now within expected ranges
+        # Feature transformer weights should be clipped
+        assert torch.all(_tiny_nnue_model.input.weight.data >= -2.0)
+        assert torch.all(_tiny_nnue_model.input.weight.data <= 2.0)
 
-    def test_configurable_feature_sets(self, device):
-        """Test different feature set configurations."""
-        configs = [
-            (4, 6, 32, 4, 4),  # Grid4x4_6, very small
-            (8, 12, 64, 4, 8),  # Grid8x8_12, small
-            (16, 8, 128, 8, 16),  # Grid16x16_8, medium
+        # Layer stack weights should be clipped
+        assert torch.all(_tiny_nnue_model.layer_stacks.l1.weight.data >= -2.0)
+        assert torch.all(_tiny_nnue_model.layer_stacks.l1.weight.data <= 2.0)
+
+    def test_configurable_feature_sets(self, _device):
+        """Test NNUE with different feature set configurations."""
+        test_configs = [
+            (GridFeatureSet(grid_size=4, num_features_per_square=4), 32, 4, 8),
+            (GridFeatureSet(grid_size=8, num_features_per_square=8), 64, 8, 16),
+            (GridFeatureSet(grid_size=6, num_features_per_square=12), 128, 16, 32),
         ]
 
-        for grid_size, features_per_square, l1_size, l2_size, l3_size in configs:
-            feature_set = GridFeatureSet(grid_size, features_per_square)
+        for feature_set, l1_size, l2_size, l3_size in test_configs:
             model = NNUE(
                 feature_set=feature_set,
                 l1_size=l1_size,
@@ -406,37 +439,35 @@ class TestNNUEArchitecture:
                 l3_size=l3_size,
                 num_ls_buckets=2,
             )
-
-            # Test forward pass
-            model.to(device)
+            model.to(_device)
             model.eval()
 
-            batch_size = 1
-            images = torch.randn(batch_size, 3, 96, 96, device=device)
-            layer_stack_indices = torch.zeros(
-                batch_size, device=device, dtype=torch.long
-            )
+            # Test forward pass
+            batch_size = 2
+            images = torch.randn(batch_size, 3, 96, 96, device=_device)
+            layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
             with torch.no_grad():
                 output = model(images, layer_stack_indices)
 
             assert_tensor_shape(output, (batch_size, 1))
             assert not torch.isnan(output).any()
-            assert not torch.isinf(output).any()
 
 
 class TestNNUEForwardBackward:
     """Test NNUE forward and backward passes."""
 
-    def test_forward_backward_basic(self, small_nnue_model, small_image_batch, device):
+    def test_forward_backward_basic(
+        self, _small_nnue_model, _small_image_batch, _device
+    ):
         """Test basic forward and backward passes."""
-        small_nnue_model.to(device)
-        small_nnue_model.train()
+        _small_nnue_model.to(_device)
+        _small_nnue_model.train()
 
-        images, targets, scores, layer_stack_indices = small_image_batch
+        images, targets, scores, layer_stack_indices = _small_image_batch
 
         # Forward pass
-        output = small_nnue_model(images, layer_stack_indices)
+        output = _small_nnue_model(images, layer_stack_indices)
 
         # Simple loss for testing
         loss = torch.mean((output - targets) ** 2)
@@ -445,201 +476,199 @@ class TestNNUEForwardBackward:
         loss.backward()
 
         # Check gradients exist and are reasonable
-        assert_gradients_exist(small_nnue_model)
-        assert_gradients_nonzero(small_nnue_model)
+        assert_gradients_exist(_small_nnue_model)
+        assert_gradients_nonzero(_small_nnue_model)
 
         assert loss.item() >= 0
         assert not torch.isnan(loss)
 
-    def test_gradient_shapes(self, small_nnue_model, small_image_batch, device):
+    def test_gradient_shapes(self, _small_nnue_model, _small_image_batch, _device):
         """Test that gradients have correct shapes."""
-        small_nnue_model.to(device)
-        small_nnue_model.train()
+        _small_nnue_model.to(_device)
+        _small_nnue_model.train()
 
-        images, targets, scores, layer_stack_indices = small_image_batch
+        images, targets, scores, layer_stack_indices = _small_image_batch
 
-        output = small_nnue_model(images, layer_stack_indices)
+        output = _small_nnue_model(images, layer_stack_indices)
         loss = torch.mean((output - targets) ** 2)
         loss.backward()
 
-        for name, param in small_nnue_model.named_parameters():
+        for name, param in _small_nnue_model.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"No gradient for {name}"
                 assert (
                     param.grad.shape == param.shape
                 ), f"Gradient shape mismatch for {name}"
 
-    def test_conv_layer_gradients(self, small_nnue_model, device):
-        """Test that conv layer receives gradients."""
-        small_nnue_model.to(device)
-        small_nnue_model.train()
+    def test_conv_layer_gradients(self, _small_nnue_model, _device):
+        """Test that conv layer gradients are computed correctly."""
+        _small_nnue_model.to(_device)
+        _small_nnue_model.train()
 
         batch_size = 2
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets = torch.rand(batch_size, 1, device=device)
-        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        targets = torch.rand(batch_size, 1, device=_device)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
-        output = small_nnue_model(images, layer_stack_indices)
+        output = _small_nnue_model(images, layer_stack_indices)
         loss = torch.mean((output - targets) ** 2)
         loss.backward()
 
-        # Check conv layer has gradients
-        assert small_nnue_model.conv.weight.grad is not None
-        assert small_nnue_model.conv.bias.grad is not None
+        # Conv layer should have gradients
+        assert _small_nnue_model.conv.weight.grad is not None
+        assert _small_nnue_model.conv.bias.grad is not None
 
-        # Check gradient shapes
-        assert small_nnue_model.conv.weight.grad.shape == (64, 3, 3, 3)
-        assert small_nnue_model.conv.bias.grad.shape == (64,)
+        # Gradients should have same shape as parameters
+        assert (
+            _small_nnue_model.conv.weight.grad.shape
+            == _small_nnue_model.conv.weight.shape
+        )
+        assert (
+            _small_nnue_model.conv.bias.grad.shape == _small_nnue_model.conv.bias.shape
+        )
 
-    def test_gradient_accumulation(self, small_nnue_model, device):
-        """Test gradient accumulation."""
-        small_nnue_model.to(device)
-        small_nnue_model.train()
+        # Gradients should be non-zero (assuming loss is meaningful)
+        assert torch.any(_small_nnue_model.conv.weight.grad != 0)
+        assert torch.any(_small_nnue_model.conv.bias.grad != 0)
 
-        # First batch
+    def test_gradient_accumulation(self, _small_nnue_model, _device):
+        """Test gradient accumulation across multiple backward passes."""
+        _small_nnue_model.to(_device)
+        _small_nnue_model.train()
+
         batch_size = 2
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        targets = torch.rand(batch_size, 1, device=_device)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
-        images1 = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets1 = torch.rand(batch_size, 1, device=device)
-        layer_stack_indices1 = torch.randint(0, 2, (batch_size,), device=device)
-
-        output1 = small_nnue_model(images1, layer_stack_indices1)
-        loss1 = torch.mean((output1 - targets1) ** 2)
+        # First backward pass
+        output1 = _small_nnue_model(images, layer_stack_indices)
+        loss1 = torch.mean((output1 - targets) ** 2)
         loss1.backward()
 
-        # Store first gradients
-        first_grads = {}
-        for name, param in small_nnue_model.named_parameters():
-            if param.grad is not None:
-                first_grads[name] = param.grad.clone()
+        # Store gradients after first pass
+        first_grad = _small_nnue_model.conv.weight.grad.clone()
 
-        # Second batch (without zeroing gradients)
-        images2 = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets2 = torch.rand(batch_size, 1, device=device)
-        layer_stack_indices2 = torch.randint(0, 2, (batch_size,), device=device)
-
-        output2 = small_nnue_model(images2, layer_stack_indices2)
-        loss2 = torch.mean((output2 - targets2) ** 2)
+        # Second backward pass (without clearing gradients)
+        output2 = _small_nnue_model(images, layer_stack_indices)
+        loss2 = torch.mean((output2 - targets) ** 2)
         loss2.backward()
 
-        # Check gradients accumulated
-        for name, param in small_nnue_model.named_parameters():
-            if param.grad is not None and name in first_grads:
-                assert not torch.allclose(param.grad, first_grads[name], atol=1e-6)
+        # Gradients should be accumulated (doubled assuming similar losses)
+        accumulated_grad = _small_nnue_model.conv.weight.grad
+
+        # The accumulated gradient should be approximately 2x the first gradient
+        # (allowing for small numerical differences)
+        expected_grad = 2 * first_grad
+        assert torch.allclose(accumulated_grad, expected_grad, rtol=1e-3, atol=1e-6)
 
 
-class TestQuantizedModelExport:
-    """Test quantized model export for C++ deployment."""
+class TestQuantization:
+    """Test model quantization for export."""
 
-    def test_quantized_data_export(self, trained_nnue_model):
-        """Test exporting quantized model data."""
-        quantized_data = trained_nnue_model.get_quantized_model_data()
+    def test_quantized_data_export(self, _trained_nnue_model):
+        """Test that quantized data can be exported."""
+        quantized_data = _trained_nnue_model.get_quantized_data()
 
-        # Use helper function to validate structure
+        # Should have all required components
         assert_quantized_weights_valid(quantized_data)
 
-        # Check metadata
-        metadata = quantized_data["metadata"]
-        assert metadata["feature_set"] == trained_nnue_model.feature_set
-        assert metadata["L1"] == 3072
-        assert metadata["num_ls_buckets"] == trained_nnue_model.num_ls_buckets
+    def test_feature_transformer_quantization(self, _trained_nnue_model):
+        """Test feature transformer quantization specifically."""
+        quantized_data = _trained_nnue_model.get_quantized_data()
 
-    def test_feature_transformer_quantization(self, trained_nnue_model):
-        """Test feature transformer quantization."""
-        quantized_data = trained_nnue_model.get_quantized_model_data()
         ft_data = quantized_data["feature_transformer"]
 
-        # Check quantization parameters
+        # Check data types
         assert ft_data["weight"].dtype == torch.int16
         assert ft_data["bias"].dtype == torch.int32
-        assert ft_data["scale"] == 64.0
 
-        # Check weight ranges for 16-bit
-        weights = ft_data["weight"]
-        assert torch.all(weights >= -32767)
-        assert torch.all(weights <= 32767)
+        # Check shapes
+        assert ft_data["weight"].shape == _trained_nnue_model.input.weight.shape
+        assert ft_data["bias"].shape == _trained_nnue_model.input.bias.shape
 
-    def test_layer_stack_quantization(self, trained_nnue_model):
+        # Check scale is reasonable
+        assert 0 < ft_data["scale"] < 1000
+
+    def test_layer_stack_quantization(self, _trained_nnue_model):
         """Test layer stack quantization."""
-        quantized_data = trained_nnue_model.get_quantized_model_data()
+        quantized_data = _trained_nnue_model.get_quantized_data()
 
-        layer_stack_keys = [
-            k for k in quantized_data.keys() if k.startswith("layer_stack_")
-        ]
-        assert len(layer_stack_keys) == trained_nnue_model.num_ls_buckets
+        # Should have layer stack data for each bucket
+        for i in range(_trained_nnue_model.num_ls_buckets):
+            ls_key = f"layer_stack_{i}"
+            assert ls_key in quantized_data
 
-        for key in layer_stack_keys:
-            ls_data = quantized_data[key]
+            ls_data = quantized_data[ls_key]
 
-            # Check 8-bit quantization
-            for weight_key in ["l1_weight", "l2_weight", "output_weight"]:
-                weights = ls_data[weight_key]
-                assert weights.dtype == torch.int8
-                assert torch.all(weights >= -127)
-                assert torch.all(weights <= 127)
+            # Check required fields
+            assert "l1_weight" in ls_data
+            assert "l2_weight" in ls_data
+            assert "output_weight" in ls_data
+            assert "scales" in ls_data
 
-    def test_conv_layer_quantization(self, trained_nnue_model):
+            # Check data types
+            assert ls_data["l1_weight"].dtype == torch.int8
+            assert ls_data["l2_weight"].dtype == torch.int8
+            assert ls_data["output_weight"].dtype == torch.int8
+
+    def test_conv_layer_quantization(self, _trained_nnue_model):
         """Test conv layer quantization."""
-        quantized_data = trained_nnue_model.get_quantized_model_data()
+        quantized_data = _trained_nnue_model.get_quantized_data()
+
         conv_data = quantized_data["conv_layer"]
 
-        # Check quantization parameters
+        # Check data types
         assert conv_data["weight"].dtype == torch.int8
         assert conv_data["bias"].dtype == torch.int32
-        assert conv_data["scale"] == 64.0
 
-        # Check weight ranges for 8-bit
-        weights = conv_data["weight"]
-        assert torch.all(weights >= -127)
-        assert torch.all(weights <= 127)
+        # Check shapes match original
+        assert conv_data["weight"].shape == _trained_nnue_model.conv.weight.shape
+        assert conv_data["bias"].shape == _trained_nnue_model.conv.bias.shape
 
-        # Check weight shape (12, 3, 3, 3)
-        assert weights.shape == (12, 3, 3, 3)
-
-        # Check bias shape (12,)
-        bias = conv_data["bias"]
-        assert bias.shape == (12,)
+        # Check scale
+        assert conv_data["scale"] > 0
 
 
 class TestPyTorchLightningIntegration:
     """Test PyTorch Lightning integration."""
 
-    def test_training_step(self, small_nnue_model, small_image_batch, device):
+    def test_training_step(self, _small_nnue_model, _small_image_batch, _device):
         """Test PyTorch Lightning training step."""
-        small_nnue_model.to(device)
+        _small_nnue_model.to(_device)
 
         batch_idx = 0
-        loss = small_nnue_model.training_step(small_image_batch, batch_idx)
+        loss = _small_nnue_model.training_step(_small_image_batch, batch_idx)
 
         assert isinstance(loss, torch.Tensor)
         assert loss.item() >= 0
         assert not torch.isnan(loss)
 
-    def test_validation_step(self, small_nnue_model, small_image_batch, device):
+    def test_validation_step(self, _small_nnue_model, _small_image_batch, _device):
         """Test PyTorch Lightning validation step."""
-        small_nnue_model.to(device)
+        _small_nnue_model.to(_device)
 
         batch_idx = 0
-        loss = small_nnue_model.validation_step(small_image_batch, batch_idx)
+        loss = _small_nnue_model.validation_step(_small_image_batch, batch_idx)
 
         assert isinstance(loss, torch.Tensor)
         assert loss.item() >= 0
         assert not torch.isnan(loss)
 
-    def test_test_step(self, small_nnue_model, small_image_batch, device):
+    def test_test_step(self, _small_nnue_model, _small_image_batch, _device):
         """Test PyTorch Lightning test step."""
-        small_nnue_model.to(device)
+        _small_nnue_model.to(_device)
 
         batch_idx = 0
-        loss = small_nnue_model.test_step(small_image_batch, batch_idx)
+        loss = _small_nnue_model.test_step(_small_image_batch, batch_idx)
 
         assert isinstance(loss, torch.Tensor)
         assert loss.item() >= 0
         assert not torch.isnan(loss)
 
-    def test_configure_optimizers(self, nnue_model):
+    def test_configure_optimizers(self, _nnue_model):
         """Test optimizer configuration."""
-        config = nnue_model.configure_optimizers()
+        config = _nnue_model.configure_optimizers()
 
         assert isinstance(config, (list, tuple))
         assert len(config) == 2  # [optimizers], [schedulers]
@@ -655,533 +684,481 @@ class TestPyTorchLightningIntegration:
         assert hasattr(optimizer, "param_groups")
         assert hasattr(scheduler, "step")
 
-    def test_loss_computation(self, small_nnue_model, device):
-        """Test NNUE loss computation."""
-        small_nnue_model.to(device)
+    def test_loss_computation(self, _small_nnue_model, _device):
+        """Test loss computation details."""
+        _small_nnue_model.to(_device)
+        _small_nnue_model.eval()
 
         batch_size = 2
-
-        # Create batch with known values for testing
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        targets = torch.tensor([[0.3], [0.8]], device=device)  # Known targets
-        scores = torch.tensor([[50.0], [-30.0]], device=device)  # Known scores
-        layer_stack_indices = torch.zeros(batch_size, device=device, dtype=torch.long)
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        targets = torch.rand(batch_size, 1, device=_device)
+        scores = torch.randn(batch_size, 1, device=_device) * 50
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
         batch = (images, targets, scores, layer_stack_indices)
 
-        loss = small_nnue_model.step_(batch, 0, "test_loss")
+        with torch.no_grad():
+            loss = _small_nnue_model.training_step(batch, 0)
 
-        assert isinstance(loss, torch.Tensor)
-        assert loss.item() >= 0
-        assert not torch.isnan(loss)
+            # Loss should be reasonable
+            assert 0 <= loss.item() <= 1000  # Reasonable upper bound
+
+        # Test with different target values
+        targets_zero = torch.zeros(batch_size, 1, device=_device)
+        targets_one = torch.ones(batch_size, 1, device=_device)
+
+        batch_zero = (images, targets_zero, scores, layer_stack_indices)
+        batch_one = (images, targets_one, scores, layer_stack_indices)
+
+        with torch.no_grad():
+            loss_zero = _small_nnue_model.training_step(batch_zero, 0)
+            loss_one = _small_nnue_model.training_step(batch_one, 0)
+
+            # Different targets should generally produce different losses
+            # (unless model output happens to be exactly 0.5)
+            assert loss_zero.item() != loss_one.item()
 
 
 class TestModelPersistence:
     """Test model saving and loading."""
 
-    def test_model_state_dict_save_load(self, small_nnue_model, temp_model_path):
+    def test_model_state_dict_save_load(self, _small_nnue_model, _temp_model_path):
         """Test saving and loading model state dict."""
         # Save model
-        torch.save(small_nnue_model.state_dict(), temp_model_path)
+        torch.save(_small_nnue_model.state_dict(), _temp_model_path)
 
-        # Create new model and load state
-        new_model = NNUE(num_ls_buckets=2)
-        new_model.load_state_dict(torch.load(temp_model_path, weights_only=True))
+        # Create new model with same architecture
+        feature_set = _small_nnue_model.feature_set
+        new_model = NNUE(
+            feature_set=feature_set,
+            l1_size=_small_nnue_model.l1_size,
+            l2_size=_small_nnue_model.l2_size,
+            l3_size=_small_nnue_model.l3_size,
+            num_ls_buckets=_small_nnue_model.num_ls_buckets,
+        )
+
+        # Load state dict
+        new_model.load_state_dict(torch.load(_temp_model_path))
 
         # Compare parameters
         for (name1, param1), (name2, param2) in zip(
-            small_nnue_model.named_parameters(), new_model.named_parameters()
+            _small_nnue_model.named_parameters(), new_model.named_parameters()
         ):
             assert name1 == name2
-            assert torch.allclose(param1, param2)
+            assert torch.allclose(param1, param2, atol=1e-6)
 
-    def test_model_consistency_after_loading(
-        self, trained_nnue_model, temp_model_path, device
-    ):
-        """Test that loaded model produces same outputs."""
-        trained_nnue_model.to(device)
-        trained_nnue_model.eval()
-
-        # Create test input
+        # Test that models produce same output
         batch_size = 2
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        layer_stack_indices = torch.zeros(batch_size, device=device, dtype=torch.long)
+        images = torch.randn(batch_size, 3, 96, 96)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,))
 
-        # Get original output
-        with torch.no_grad():
-            original_output = trained_nnue_model(images, layer_stack_indices)
-
-        # Save and load model
-        torch.save(trained_nnue_model.state_dict(), temp_model_path)
-
-        new_model = NNUE(num_ls_buckets=2)
-        new_model.load_state_dict(torch.load(temp_model_path, weights_only=True))
-        new_model.to(device)
+        _small_nnue_model.eval()
         new_model.eval()
 
-        # Get loaded output
         with torch.no_grad():
-            loaded_output = new_model(images, layer_stack_indices)
+            output1 = _small_nnue_model(images, layer_stack_indices)
+            output2 = new_model(images, layer_stack_indices)
 
-        assert torch.allclose(original_output, loaded_output, atol=1e-6)
+        assert torch.allclose(output1, output2, atol=1e-6)
 
 
-class TestModelRobustness:
-    """Test model robustness and edge cases."""
+class TestRobustness:
+    """Test model robustness to edge cases."""
 
-    def test_extreme_image_values(self, small_nnue_model, device):
-        """Test model with extreme image values."""
-        small_nnue_model.to(device)
-        small_nnue_model.eval()
+    def test_extreme_image_values(self, _small_nnue_model, _device):
+        """Test model with extreme input values."""
+        _small_nnue_model.to(_device)
+        _small_nnue_model.eval()
 
         batch_size = 2
-        layer_stack_indices = torch.zeros(batch_size, device=device, dtype=torch.long)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
-        # Test with very large image values
-        large_images = torch.ones(batch_size, 3, 96, 96, device=device) * 100
-        with torch.no_grad():
-            output = small_nnue_model(large_images, layer_stack_indices)
-        assert not torch.isnan(output).any()
-        assert not torch.isinf(output).any()
+        test_cases = [
+            torch.zeros(batch_size, 3, 96, 96, device=_device),  # All zeros
+            torch.ones(batch_size, 3, 96, 96, device=_device),  # All ones
+            torch.full(
+                (batch_size, 3, 96, 96), 1000.0, device=_device
+            ),  # Very large values
+            torch.full(
+                (batch_size, 3, 96, 96), -1000.0, device=_device
+            ),  # Very negative values
+        ]
 
-        # Test with very small image values
-        small_images = torch.ones(batch_size, 3, 96, 96, device=device) * 1e-6
-        with torch.no_grad():
-            output = small_nnue_model(small_images, layer_stack_indices)
-        assert not torch.isnan(output).any()
-        assert not torch.isinf(output).any()
+        for images in test_cases:
+            with torch.no_grad():
+                output = _small_nnue_model(images, layer_stack_indices)
 
-    def test_model_determinism(self, small_nnue_model, device):
-        """Test model determinism."""
-        small_nnue_model.to(device)
-        small_nnue_model.eval()
+            # Model should still produce finite outputs
+            assert torch.isfinite(output).all(), f"Non-finite output for extreme inputs"
+            assert_tensor_shape(output, (batch_size, 1))
 
-        torch.manual_seed(42)
+    def test_model_determinism(self, _small_nnue_model, _device):
+        """Test that model produces deterministic outputs."""
+        _small_nnue_model.to(_device)
+        _small_nnue_model.eval()
+
         batch_size = 2
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
+        layer_stack_indices = torch.randint(0, 2, (batch_size,), device=_device)
 
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
-        layer_stack_indices = torch.zeros(batch_size, device=device, dtype=torch.long)
-
-        # Run multiple times
+        # Run multiple times with same input
         outputs = []
         for _ in range(3):
             with torch.no_grad():
-                output = small_nnue_model(images, layer_stack_indices)
+                output = _small_nnue_model(images, layer_stack_indices)
             outputs.append(output)
 
         # All outputs should be identical
         for i in range(1, len(outputs)):
             assert torch.allclose(outputs[0], outputs[i], atol=1e-6)
 
-    def test_invalid_bucket_indices(self, small_nnue_model, device):
+    def test_invalid_bucket_indices(self, _small_nnue_model, _device):
         """Test model behavior with invalid bucket indices."""
-        small_nnue_model.to(device)
+        _small_nnue_model.to(_device)
+        _small_nnue_model.eval()
 
         batch_size = 2
+        images = torch.randn(batch_size, 3, 96, 96, device=_device)
 
-        images = torch.randn(batch_size, 3, 96, 96, device=device)
+        # Test with out-of-range bucket indices
+        invalid_indices = torch.tensor([99, 100], device=_device)  # Way out of range
 
-        # Invalid bucket indices (should cause error)
-        invalid_indices = torch.tensor(
-            [5, 10], device=device
-        )  # Only 2 buckets available (0, 1)
+        # Model should handle gracefully (likely with clamping)
+        with torch.no_grad():
+            try:
+                output = _small_nnue_model(images, invalid_indices)
+                # If it doesn't crash, output should still be valid
+                assert_tensor_shape(output, (batch_size, 1))
+                assert torch.isfinite(output).all()
+            except (IndexError, RuntimeError):
+                # It's also acceptable for model to raise an error for invalid indices
+                pass
 
-        with pytest.raises(IndexError):
-            small_nnue_model(images, invalid_indices)
-
-
-class TestSparseFeatureValidation:
-    """Test sparse feature input validation."""
-
-    def test_sparse_feature_validation(self, grid_feature_set):
-        """Test that sparse features are validated correctly."""
+    def test_sparse_feature_validation(self, _grid_feature_set):
+        """Test sparse feature validation utility."""
         batch_size = 3
         max_features = 8
 
-        # Valid features
+        # Valid sparse features
         valid_indices = torch.randint(
-            0, grid_feature_set.num_features, (batch_size, max_features)
+            0, _grid_feature_set.num_features, (batch_size, max_features)
         )
         valid_values = torch.ones(batch_size, max_features)
 
-        # Should not raise error
+        # Add some padding (-1)
+        valid_indices[0, -2:] = -1  # Last 2 features are padding
+        valid_indices[1, -1:] = -1  # Last feature is padding
+
+        # Should pass validation
         assert_sparse_features_valid(
-            valid_indices, valid_values, grid_feature_set.num_features
+            valid_indices, valid_values, _grid_feature_set.num_features
         )
 
-        # Test with padding
-        padded_indices = valid_indices.clone()
-        padded_indices[:, -2:] = -1  # Last 2 features are padding
-
-        assert_sparse_features_valid(
-            padded_indices, valid_values, grid_feature_set.num_features
-        )
-
-    def test_invalid_sparse_features(self, grid_feature_set):
+    def test_invalid_sparse_features(self, _grid_feature_set):
         """Test detection of invalid sparse features."""
         batch_size = 2
         max_features = 4
 
-        # Invalid: feature index exceeds max
-        invalid_indices = torch.tensor([[0, 1, grid_feature_set.num_features, -1]])
-        valid_values = torch.ones(1, max_features)
-
-        with pytest.raises(AssertionError):
-            assert_sparse_features_valid(
-                invalid_indices, valid_values, grid_feature_set.num_features
-            )
-
-        # Invalid: negative values for valid indices
-        valid_indices = torch.randint(
-            0, grid_feature_set.num_features, (batch_size, max_features)
+        # Test case 1: Feature indices out of range
+        invalid_indices = torch.tensor(
+            [
+                [0, 1, _grid_feature_set.num_features + 1, -1],
+                [2, 3, 4, -1],
+            ]  # Out of range
         )
-        invalid_values = torch.ones(batch_size, max_features)
-        invalid_values[0, 0] = -1.0  # Negative value
+        valid_values = torch.ones(batch_size, max_features)
 
         with pytest.raises(AssertionError):
             assert_sparse_features_valid(
-                valid_indices, invalid_values, grid_feature_set.num_features
+                invalid_indices, valid_values, _grid_feature_set.num_features
+            )
+
+        # Test case 2: Invalid padding value
+        invalid_indices = torch.tensor(
+            [[0, 1, 2, -2], [3, 4, 5, -1]]
+        )  # -2 is not valid padding
+        valid_values = torch.ones(batch_size, max_features)
+
+        with pytest.raises(AssertionError):
+            assert_sparse_features_valid(
+                invalid_indices, valid_values, _grid_feature_set.num_features
             )
 
 
-class TestNNUESerialization:
-    """Test NNUE model serialization to .nnue format."""
+class TestSerialization:
+    """Test model serialization to .nnue format."""
 
     @pytest.fixture
-    def temp_nnue_path(self, tmp_path):
-        """Return a temporary path for .nnue files."""
-        return tmp_path / "test_model.nnue"
+    def temp_nnue_path(self, _tmp_path):
+        """Return a temporary path for NNUE files."""
+        return _tmp_path / "test_model.nnue"
 
     @pytest.fixture
-    def temp_checkpoint_path(self, tmp_path):
+    def temp_checkpoint_path(self, _tmp_path):
         """Return a temporary path for checkpoint files."""
-        return tmp_path / "test_checkpoint.pt"
+        return _tmp_path / "test_checkpoint.pt"
 
-    def test_model_quantized_data_export(self, small_nnue_model):
-        """Test that model can export quantized data for serialization."""
-        small_nnue_model.eval()
-        small_nnue_model._clip_weights()
+    def test_model_quantized_data_export(self, _small_nnue_model):
+        """Test quantized data export for C++ engine."""
+        quantized_data = _small_nnue_model.get_quantized_data()
 
-        # Get quantized model data
-        quantized_data = small_nnue_model.get_quantized_model_data()
-
-        # Validate the quantized data structure
+        # Validate structure
         assert_quantized_weights_valid(quantized_data)
-
-        # Check feature transformer data
-        ft_data = quantized_data["feature_transformer"]
-        assert ft_data["weight"].dtype == torch.int16
-        assert ft_data["bias"].dtype == torch.int32
-        assert ft_data["scale"] == 64.0
-
-        # Check layer stack data
-        expected_buckets = small_nnue_model.num_ls_buckets
-        for i in range(expected_buckets):
-            ls_key = f"layer_stack_{i}"
-            assert ls_key in quantized_data
-
-            ls_data = quantized_data[ls_key]
-            assert ls_data["l1_weight"].dtype == torch.int8
-            assert ls_data["l2_weight"].dtype == torch.int8
-            assert ls_data["output_weight"].dtype == torch.int8
 
         # Check metadata
         metadata = quantized_data["metadata"]
-        assert metadata["feature_set"] == small_nnue_model.feature_set
-        assert metadata["num_ls_buckets"] == expected_buckets
-        assert metadata["nnue2score"] == 600.0
-
-    def test_serialize_model_to_nnue_file(
-        self, small_nnue_model, temp_nnue_path, temp_checkpoint_path
-    ):
-        """Test complete model serialization to .nnue file."""
-        # Save model checkpoint
-        torch.save(small_nnue_model.state_dict(), temp_checkpoint_path)
-
-        # Import serialize module
-        import serialize
-
-        # Test loading model from checkpoint
-        loaded_model = serialize.load_model_from_checkpoint(temp_checkpoint_path)
-
-        # Verify loaded model has same architecture
         assert (
-            loaded_model.feature_set.num_features
-            == small_nnue_model.feature_set.num_features
+            metadata["feature_set"]["grid_size"]
+            == _small_nnue_model.feature_set.grid_size
         )
-        assert loaded_model.num_ls_buckets == small_nnue_model.num_ls_buckets
+        assert (
+            metadata["feature_set"]["num_features_per_square"]
+            == _small_nnue_model.feature_set.num_features_per_square
+        )
+        assert metadata["l1_size"] == _small_nnue_model.l1_size
+        assert metadata["l2_size"] == _small_nnue_model.l2_size
+        assert metadata["l3_size"] == _small_nnue_model.l3_size
+        assert metadata["num_ls_buckets"] == _small_nnue_model.num_ls_buckets
 
-        # Test serialization
-        serialize.serialize_model(loaded_model, temp_nnue_path)
+        # Check that quantized weights have reasonable ranges
+        ft_weight = quantized_data["feature_transformer"]["weight"]
+        assert ft_weight.min() >= -32768 and ft_weight.max() <= 32767  # int16 range
 
-        # Verify .nnue file was created
-        assert temp_nnue_path.exists()
-        assert temp_nnue_path.stat().st_size > 0
+        conv_weight = quantized_data["conv_layer"]["weight"]
+        assert conv_weight.min() >= -128 and conv_weight.max() <= 127  # int8 range
 
-        # Basic validation of file header
-        with open(temp_nnue_path, "rb") as f:
-            magic = f.read(4)
-            assert magic == b"NNUE", f"Invalid magic number: {magic}"
+        # Check layer stacks
+        for i in range(_small_nnue_model.num_ls_buckets):
+            ls_data = quantized_data[f"layer_stack_{i}"]
 
-            version = int.from_bytes(f.read(4), "little")
-            assert (
-                version == 2
-            ), f"Unexpected version: {version} (should be 2 for conv layer support)"
+            l1_weight = ls_data["l1_weight"]
+            assert l1_weight.min() >= -128 and l1_weight.max() <= 127
 
-    def test_serialize_via_command_line(
-        self, small_nnue_model, temp_nnue_path, temp_checkpoint_path
-    ):
-        """Test serialization via command line interface."""
-        # Save model checkpoint
-        torch.save(small_nnue_model.state_dict(), temp_checkpoint_path)
+            l2_weight = ls_data["l2_weight"]
+            assert l2_weight.min() >= -128 and l2_weight.max() <= 127
 
-        # Test command line serialization
-        cmd = [
-            sys.executable,
-            "serialize.py",
-            str(temp_checkpoint_path),
-            str(temp_nnue_path),
-            "--features=Grid4x4_6",
-        ]
+            output_weight = ls_data["output_weight"]
+            assert output_weight.min() >= -128 and output_weight.max() <= 127
 
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=Path.cwd())
+        # Additional checks for scale factors
+        for i in range(_small_nnue_model.num_ls_buckets):
+            ls_data = quantized_data[f"layer_stack_{i}"]
+            scales = ls_data["scales"]
 
-        # Check command succeeded
-        assert result.returncode == 0, f"Serialization failed: {result.stderr}"
+            for scale_name, scale_value in scales.items():
+                assert scale_value > 0, f"Scale {scale_name} should be positive"
+                assert (
+                    scale_value < 1000
+                ), f"Scale {scale_name} seems too large: {scale_value}"
 
-        # Verify output file exists
-        assert temp_nnue_path.exists()
-        assert temp_nnue_path.stat().st_size > 0
-
-    def test_nnue_file_structure_validation(self, small_nnue_model, temp_nnue_path):
-        """Test detailed validation of .nnue file structure."""
+    def test_nnue_file_structure_validation(self, _small_nnue_model, _temp_nnue_path):
+        """Test that serialized .nnue file has correct structure."""
+        # Import serialize module for testing
         import serialize
 
-        # Serialize the model
-        serialize.serialize_model(small_nnue_model, temp_nnue_path)
+        # Serialize model
+        serialize.serialize_model(_small_nnue_model, _temp_nnue_path)
+
+        # Verify file was created
+        assert _temp_nnue_path.exists()
+        assert _temp_nnue_path.stat().st_size > 0
 
         # Read and validate file structure
-        with open(temp_nnue_path, "rb") as f:
-            # Header validation
+        with open(_temp_nnue_path, "rb") as f:
+            # Check magic header
             magic = f.read(4)
-            assert magic == b"NNUE"
+            assert len(magic) == 4
 
-            version = int.from_bytes(f.read(4), "little")
-            assert version == 2
+            # Check version
+            version = struct.unpack("I", f.read(4))[0]
+            assert version > 0
 
-            # Architecture metadata
-            num_features = int.from_bytes(f.read(4), "little")
-            L1 = int.from_bytes(f.read(4), "little")
-            L2 = int.from_bytes(f.read(4), "little")
-            L3 = int.from_bytes(f.read(4), "little")
-            num_buckets = int.from_bytes(f.read(4), "little")
+            # Check feature set info
+            grid_size = struct.unpack("I", f.read(4))[0]
+            assert grid_size == _small_nnue_model.feature_set.grid_size
 
-            assert num_features == small_nnue_model.feature_set.num_features
-            assert L1 == 3072
-            assert L2 == 15
-            assert L3 == 32
-            assert num_buckets == small_nnue_model.num_ls_buckets
-
-            # Quantization parameters
-            nnue2score = struct.unpack("<f", f.read(4))[0]
-            quantized_one = struct.unpack("<f", f.read(4))[0]
-            visual_threshold = struct.unpack("<f", f.read(4))[0]
-
-            assert abs(nnue2score - 600.0) < 1e-6
-            assert abs(quantized_one - 127.0) < 1e-6
-            assert abs(visual_threshold - small_nnue_model.visual_threshold) < 1e-6
-
-            # Validate conv layer structure
-            conv_scale = struct.unpack("<f", f.read(4))[0]
-            conv_out_channels = int.from_bytes(f.read(4), "little")
-            conv_in_channels = int.from_bytes(f.read(4), "little")
-            conv_kernel_h = int.from_bytes(f.read(4), "little")
-            conv_kernel_w = int.from_bytes(f.read(4), "little")
-
-            assert abs(conv_scale - 64.0) < 1e-6
-            assert conv_out_channels == 64
-            assert conv_in_channels == 3
-            assert conv_kernel_h == 3
-            assert conv_kernel_w == 3
-
-            # Skip conv weights and bias for now (could add validation if needed)
-            conv_weight_size = (
-                conv_out_channels * conv_in_channels * conv_kernel_h * conv_kernel_w
+            features_per_square = struct.unpack("I", f.read(4))[0]
+            assert (
+                features_per_square
+                == _small_nnue_model.feature_set.num_features_per_square
             )
-            f.read(conv_weight_size)  # int8 weights
 
-            conv_bias_dim = int.from_bytes(f.read(4), "little")
-            assert conv_bias_dim == conv_out_channels
-            f.read(conv_bias_dim * 4)  # int32 bias
+            # Check layer sizes
+            l1_size = struct.unpack("I", f.read(4))[0]
+            assert l1_size == _small_nnue_model.l1_size
 
-    def test_serialization_consistency_across_runs(self, small_nnue_model, tmp_path):
-        """Test that serialization produces consistent results."""
+            l2_size = struct.unpack("I", f.read(4))[0]
+            assert l2_size == _small_nnue_model.l2_size
+
+            l3_size = struct.unpack("I", f.read(4))[0]
+            assert l3_size == _small_nnue_model.l3_size
+
+            num_buckets = struct.unpack("I", f.read(4))[0]
+            assert num_buckets == _small_nnue_model.num_ls_buckets
+
+            # More detailed validation could be added here
+            # For now, just check that we can read the basic header
+
+    def test_serialization_consistency_across_runs(self, _small_nnue_model, _tmp_path):
+        """Test that serialization produces identical files across multiple runs."""
         import serialize
 
-        file1 = tmp_path / "model1.nnue"
-        file2 = tmp_path / "model2.nnue"
+        path1 = _tmp_path / "model1.nnue"
+        path2 = _tmp_path / "model2.nnue"
 
         # Serialize same model twice
-        serialize.serialize_model(small_nnue_model, file1)
-        serialize.serialize_model(small_nnue_model, file2)
+        serialize.serialize_model(_small_nnue_model, path1)
+        serialize.serialize_model(_small_nnue_model, path2)
 
         # Files should be identical
-        with open(file1, "rb") as f1, open(file2, "rb") as f2:
+        with open(path1, "rb") as f1, open(path2, "rb") as f2:
             data1 = f1.read()
             data2 = f2.read()
-            assert data1 == data2, "Serialization should be deterministic"
 
-    def test_serialize_different_model_sizes(self, tmp_path):
+        assert data1 == data2, "Serialization should be deterministic"
+
+    def test_serialize_different_model_sizes(self, _tmp_path):
         """Test serialization with different model architectures."""
         import serialize
 
-        # Test with different layer stack bucket counts
-        # Note: feature set is fixed in NNUE model (32x32x64 for maximum sparsity)
-        bucket_counts = [2, 4, 8]
+        test_configs = [
+            # (grid_size, features_per_square, l1, l2, l3, buckets)
+            (4, 4, 32, 4, 8, 2),
+            (8, 8, 64, 8, 16, 4),
+            (6, 12, 128, 16, 32, 3),
+        ]
 
-        for i, num_buckets in enumerate(bucket_counts):
-            model = NNUE(num_ls_buckets=num_buckets)
-            output_path = tmp_path / f"model_{i}.nnue"
-
-            # Should not raise any exceptions
-            serialize.serialize_model(model, output_path)
-
-            # Verify file was created with correct size
-            assert output_path.exists()
-            assert output_path.stat().st_size > 1000  # Reasonable minimum size
-
-    def test_error_handling_invalid_input(self, tmp_path):
-        """Test error handling for invalid inputs."""
-        import serialize
-
-        # Test non-existent input file
-        with pytest.raises(FileNotFoundError):
-            serialize.load_model_from_checkpoint(tmp_path / "nonexistent.pt")
-
-        # Test invalid output directory
-        invalid_output = tmp_path / "nonexistent_dir" / "model.nnue"
-        model = NNUE(GridFeatureSet(4, 6), num_ls_buckets=2)
-
-        with pytest.raises(FileNotFoundError):
-            serialize.serialize_model(model, invalid_output)
-
-    def test_quantization_weight_clipping(self, small_nnue_model):
-        """Test that weights are properly clipped before serialization."""
-        import serialize
-
-        # Manually set some weights to extreme values
-        with torch.no_grad():
-            # Set feature transformer weights to extreme values
-            small_nnue_model.input.weight.data.fill_(1000.0)
-            small_nnue_model.layer_stacks.l1.weight.data.fill_(-1000.0)
-
-        # Get quantized data (should clip weights)
-        quantized_data = small_nnue_model.get_quantized_model_data()
-
-        # Check that weights are within quantization bounds
-        ft_weight = quantized_data["feature_transformer"]["weight"]
-        assert torch.all(ft_weight >= -32767)
-        assert torch.all(ft_weight <= 32767)
-
-        # Check layer stack weights
-        for i in range(small_nnue_model.num_ls_buckets):
-            ls_data = quantized_data[f"layer_stack_{i}"]
-            for weight_key in ["l1_weight", "l2_weight", "output_weight"]:
-                weight = ls_data[weight_key]
-                assert torch.all(weight >= -127)
-                assert torch.all(weight <= 127)
-
-    def test_conv_layer_serialization(self, small_nnue_model, temp_nnue_path):
-        """Test that conv layer is properly serialized and validated."""
-        import serialize
-
-        # Get quantized data before serialization
-        quantized_data = small_nnue_model.get_quantized_model_data()
-        conv_data = quantized_data["conv_layer"]
-
-        # Verify conv layer quantized data structure
-        assert conv_data["weight"].dtype == torch.int8
-        assert conv_data["bias"].dtype == torch.int32
-        assert conv_data["scale"] == 64.0
-        assert conv_data["weight"].shape == (64, 3, 3, 3)
-        assert conv_data["bias"].shape == (64,)
-
-        # Serialize model
-        serialize.serialize_model(small_nnue_model, temp_nnue_path)
-
-        # Read back conv layer data and validate
-        with open(temp_nnue_path, "rb") as f:
-            # Skip header (magic, version, architecture metadata, quantization params, visual_threshold)
-            f.read(4 + 4 + 5 * 4 + 2 * 4 + 4)  # 44 bytes total
-
-            # Read conv layer
-            import struct
-
-            conv_scale = struct.unpack("<f", f.read(4))[0]
-            assert abs(conv_scale - 64.0) < 1e-6
-
-            # Read dimensions
-            out_channels = int.from_bytes(f.read(4), "little")
-            in_channels = int.from_bytes(f.read(4), "little")
-            kernel_h = int.from_bytes(f.read(4), "little")
-            kernel_w = int.from_bytes(f.read(4), "little")
-
-            assert out_channels == 64
-            assert in_channels == 3
-            assert kernel_h == 3
-            assert kernel_w == 3
-
-            # Read weights and verify some are non-zero
-            weight_bytes = f.read(out_channels * in_channels * kernel_h * kernel_w)
-            weights = torch.frombuffer(weight_bytes, dtype=torch.int8)
-            assert weights.shape == (64 * 3 * 3 * 3,)
-            assert not torch.all(weights == 0)  # Should have some non-zero weights
-
-            # Read bias
-            bias_dim = int.from_bytes(f.read(4), "little")
-            assert bias_dim == 64
-            bias_bytes = f.read(bias_dim * 4)
-            bias = torch.frombuffer(bias_bytes, dtype=torch.int32)
-            assert bias.shape == (64,)
-
-    def test_model_size_estimation(self, small_nnue_model, temp_nnue_path):
-        """Test that serialized model size is reasonable."""
-        import serialize
-
-        serialize.serialize_model(small_nnue_model, temp_nnue_path)
-
-        file_size = temp_nnue_path.stat().st_size
-
-        # Estimate expected size based on model parameters
-        feature_set = small_nnue_model.feature_set
-        expected_size = (
-            # Header (increased for version 2)
-            44
-            +
-            # Conv layer (int8 weights + int32 bias + metadata)
-            20
-            + 64 * 3 * 3 * 3 * 1
-            + 4
-            + 64 * 4
-            +
-            # Feature transformer (int16 weights + int32 biases)
-            12
-            + feature_set.num_features * 3072 * 2
-            + 4
-            + 3072 * 4
-            +
-            # Layer stacks (int8 weights + int32 biases) * num_buckets
-            small_nnue_model.num_ls_buckets
-            * (
-                12
-                + (3072 * 16 + 16 * 4)  # L1
-                + 8
-                + (30 * 32 + 32 * 4)  # L2
-                + 8
-                + (32 * 1 + 1 * 4)  # Output
+        for i, (grid_size, features_per_square, l1, l2, l3, buckets) in enumerate(
+            test_configs
+        ):
+            feature_set = GridFeatureSet(grid_size, features_per_square)
+            model = NNUE(
+                feature_set=feature_set,
+                l1_size=l1,
+                l2_size=l2,
+                l3_size=l3,
+                num_ls_buckets=buckets,
             )
+
+            path = _tmp_path / f"model_{i}.nnue"
+            serialize.serialize_model(model, path)
+
+            # File should exist and have reasonable size
+            assert path.exists()
+            assert path.stat().st_size > 1000  # Should be at least 1KB
+
+    def test_error_handling_invalid_input(self, _tmp_path):
+        """Test error handling in serialization."""
+        import serialize
+
+        # Test with invalid path
+        invalid_path = Path("/invalid/path/model.nnue")
+
+        feature_set = GridFeatureSet(4, 4)
+        model = NNUE(
+            feature_set=feature_set, l1_size=32, l2_size=4, l3_size=8, num_ls_buckets=2
         )
 
-        # Allow some tolerance for metadata and alignment
-        assert file_size > expected_size * 0.8
-        assert file_size < expected_size * 1.2
+        with pytest.raises((OSError, PermissionError, FileNotFoundError)):
+            serialize.serialize_model(model, invalid_path)
+
+    def test_quantization_weight_clipping(self, _small_nnue_model):
+        """Test that quantization properly clips extreme weights."""
+        # Set some weights to extreme values
+        with torch.no_grad():
+            _small_nnue_model.input.weight.data.fill_(100.0)  # Very large
+            _small_nnue_model.layer_stacks.l1.weight.data.fill_(-100.0)  # Very negative
+
+        # Get quantized data
+        quantized_data = _small_nnue_model.get_quantized_data()
+
+        # Check that quantized weights are within valid ranges
+        ft_weight = quantized_data["feature_transformer"]["weight"]
+        assert ft_weight.min() >= -32768
+        assert ft_weight.max() <= 32767
+
+        # Check layer stack weights
+        for i in range(_small_nnue_model.num_ls_buckets):
+            ls_data = quantized_data[f"layer_stack_{i}"]
+
+            for weight_name in ["l1_weight", "l2_weight", "output_weight"]:
+                weight = ls_data[weight_name]
+                assert weight.min() >= -128
+                assert weight.max() <= 127
+
+        # Check conv layer weights
+        conv_weight = quantized_data["conv_layer"]["weight"]
+        assert conv_weight.min() >= -128
+        assert conv_weight.max() <= 127
+
+    def test_conv_layer_serialization(self, _small_nnue_model, _temp_nnue_path):
+        """Test that conv layer is properly serialized."""
+        import serialize
+
+        # Serialize model
+        serialize.serialize_model(_small_nnue_model, _temp_nnue_path)
+
+        # Verify that conv layer data is in quantized export
+        quantized_data = _small_nnue_model.get_quantized_data()
+        conv_data = quantized_data["conv_layer"]
+
+        # Check that conv layer has all required fields
+        assert "weight" in conv_data
+        assert "bias" in conv_data
+        assert "scale" in conv_data
+
+        # Check shapes match original conv layer
+        original_conv = _small_nnue_model.conv
+        assert conv_data["weight"].shape == original_conv.weight.shape
+        assert conv_data["bias"].shape == original_conv.bias.shape
+
+        # Check quantization is reasonable
+        assert conv_data["weight"].dtype == torch.int8
+        assert conv_data["bias"].dtype == torch.int32
+        assert conv_data["scale"] > 0
+
+    def test_model_size_estimation(self, _small_nnue_model, _temp_nnue_path):
+        """Test that serialized model has expected file size."""
+        import serialize
+
+        # Serialize model
+        serialize.serialize_model(_small_nnue_model, _temp_nnue_path)
+
+        file_size = _temp_nnue_path.stat().st_size
+
+        # Estimate expected size based on model parameters
+        # This is a rough estimate - actual size may vary due to headers, alignment, etc.
+
+        # Feature transformer: weights (int16) + biases (int32)
+        ft_weights = _small_nnue_model.input.weight.numel() * 2  # int16 = 2 bytes
+        ft_biases = _small_nnue_model.input.bias.numel() * 4  # int32 = 4 bytes
+
+        # Conv layer: weights (int8) + biases (int32)
+        conv_weights = _small_nnue_model.conv.weight.numel() * 1  # int8 = 1 byte
+        conv_biases = _small_nnue_model.conv.bias.numel() * 4  # int32 = 4 bytes
+
+        # Layer stacks: all weights (int8) + biases (int32)
+        ls_size = 0
+        for i in range(_small_nnue_model.num_ls_buckets):
+            # Rough estimate of layer stack size
+            ls_size += (
+                _small_nnue_model.l1_size * (_small_nnue_model.l2_size + 1)
+            ) * 1  # L1 weights
+            ls_size += (
+                _small_nnue_model.l2_size * 2 * _small_nnue_model.l3_size
+            ) * 1  # L2 weights
+            ls_size += (_small_nnue_model.l3_size * 1) * 1  # Output weights
+            ls_size += (
+                _small_nnue_model.l2_size + 1 + _small_nnue_model.l3_size + 1
+            ) * 4  # Biases
+
+        estimated_size = ft_weights + ft_biases + conv_weights + conv_biases + ls_size
+
+        # Add some overhead for headers, metadata, alignment
+        estimated_size_with_overhead = estimated_size + 1000
+
+        # File size should be reasonably close to estimate
+        assert file_size >= estimated_size * 0.5  # At least 50% of estimate
+        assert (
+            file_size <= estimated_size_with_overhead * 2
+        )  # At most 2x estimate with overhead

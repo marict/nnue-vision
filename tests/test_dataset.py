@@ -167,12 +167,12 @@ class TestDatasetStatistics:
         assert stats["num_classes"] == 2
         assert len(stats["class_names"]) == 2
 
-    def test_print_dataset_stats(self, capsys):
+    def test_print_dataset_stats(self, _capsys):
         """Test dataset statistics printing."""
         print_dataset_stats()
 
         # Capture output
-        captured = capsys.readouterr()
+        captured = _capsys.readouterr()
         output = captured.out
 
         # Check that key information is printed
