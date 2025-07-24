@@ -746,12 +746,12 @@ class LayerStacks(nn.Module):
         # for the serializer, because the buckets are interpreted as separate layers.
         for i in range(self.count):
             with torch.no_grad():
-                # Extract only the L2 part (not L2+1) for C++ engine compatibility
-                l1 = nn.Linear(self.l1_size, self.l2_size)
+                # Create layers that preserve the +1 components needed for factorization
+                l1 = nn.Linear(self.l1_size, self.l2_size + 1)  # Keep +1 for l1c_out
                 l2 = nn.Linear(self.l2_size * 2, self.l3_size)
                 output = nn.Linear(self.l3_size, 1)
 
-                # Get combined weights/biases (l1 + l1_fact)
+                # Get combined weights/biases (l1 + l1_fact) but preserve all components
                 combined_weight = (
                     self.l1.weight[
                         i * (self.l2_size + 1) : (i + 1) * (self.l2_size + 1), :
@@ -763,9 +763,9 @@ class LayerStacks(nn.Module):
                     + self.l1_fact.bias.data
                 )
 
-                # Extract only the first L2 components (skip the +1 part used for factorization)
-                l1.weight.data = combined_weight[: self.l2_size, :]
-                l1.bias.data = combined_bias[: self.l2_size]
+                # Preserve all components including the +1 for l1c_out
+                l1.weight.data = combined_weight
+                l1.bias.data = combined_bias
 
                 l2.weight.data = self.l2.weight[
                     i * self.l3_size : (i + 1) * self.l3_size, :
@@ -1228,11 +1228,20 @@ class NNUE(pl.LightningModule):
             l2_scale = self.weight_scale_hidden
             out_scale = self.weight_scale_out
 
+            # Get original factorization data for this bucket
+            l1_fact_weight = self.layer_stacks.l1_fact.weight.data
+            l1_fact_bias = self.layer_stacks.l1_fact.bias.data
+
             quantized_data[f"layer_stack_{i}"] = {
                 "l1_weight": torch.round(l1.weight.data * l1_scale)
                 .clamp_(-127, 127)
                 .to(torch.int8),
                 "l1_bias": torch.round(l1.bias.data * l1_scale).to(torch.int32),
+                # Add factorization layer data
+                "l1_fact_weight": torch.round(l1_fact_weight * l1_scale)
+                .clamp_(-127, 127)
+                .to(torch.int8),
+                "l1_fact_bias": torch.round(l1_fact_bias * l1_scale).to(torch.int32),
                 "l2_weight": torch.round(l2.weight.data * l2_scale)
                 .clamp_(-127, 127)
                 .to(torch.int8),
@@ -1243,7 +1252,12 @@ class NNUE(pl.LightningModule):
                 "output_bias": torch.round(output.bias.data * out_scale).to(
                     torch.int32
                 ),
-                "scales": {"l1": l1_scale, "l2": l2_scale, "output": out_scale},
+                "scales": {
+                    "l1": l1_scale,
+                    "l2": l2_scale,
+                    "output": out_scale,
+                    "l1_fact": l1_scale,
+                },
             }
 
         # Add conv layer weights (scale conv channels based on feature set)
@@ -1261,6 +1275,7 @@ class NNUE(pl.LightningModule):
             "weight": conv_weight_q,
             "bias": conv_bias_q,
             "scale": conv_scale,
+            "layer_type": 0,  # Standard convolution layer
         }
 
         quantized_data["metadata"] = {

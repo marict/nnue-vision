@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <fstream>
+#include <mutex> // Added for MemoryPool mutex
 
 namespace nnue {
 
@@ -27,6 +28,92 @@ constexpr float QUANTIZED_ONE = 127.0f;
 
 // SIMD alignment
 constexpr int CACHE_LINE_SIZE = 64;
+
+// Memory buffer pool for efficient temporary allocations
+class MemoryPool {
+private:
+    struct Buffer {
+        std::unique_ptr<int8_t[]> data;
+        size_t size;
+        bool in_use;
+        
+        Buffer(size_t s) : data(std::make_unique<int8_t[]>(s)), size(s), in_use(false) {}
+    };
+    
+    mutable std::vector<std::unique_ptr<Buffer>> buffers_;
+    mutable std::mutex mutex_;
+    
+public:
+    // Get a buffer of at least the requested size
+    int8_t* get_buffer(size_t min_size) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        // Find existing buffer that's large enough and not in use
+        for (auto& buf : buffers_) {
+            if (!buf->in_use && buf->size >= min_size) {
+                buf->in_use = true;
+                return buf->data.get();
+            }
+        }
+        
+        // Create new buffer with some extra space to avoid frequent reallocations
+        size_t alloc_size = std::max(min_size, size_t(4096));  // At least 4KB
+        auto new_buffer = std::make_unique<Buffer>(alloc_size);
+        int8_t* ptr = new_buffer->data.get();
+        new_buffer->in_use = true;
+        buffers_.push_back(std::move(new_buffer));
+        
+        return ptr;
+    }
+    
+    // Return a buffer to the pool
+    void return_buffer(int8_t* ptr) const {
+        if (!ptr) return;
+        
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& buf : buffers_) {
+            if (buf->data.get() == ptr) {
+                buf->in_use = false;
+                break;
+            }
+        }
+    }
+    
+    // RAII wrapper for automatic buffer management
+    class BufferLock {
+    private:
+        const MemoryPool* pool_;
+        int8_t* buffer_;
+        
+    public:
+        BufferLock(const MemoryPool* pool, size_t size) : pool_(pool), buffer_(pool->get_buffer(size)) {}
+        ~BufferLock() { pool_->return_buffer(buffer_); }
+        
+        int8_t* get() const { return buffer_; }
+        
+        // Delete copy constructor and assignment
+        BufferLock(const BufferLock&) = delete;
+        BufferLock& operator=(const BufferLock&) = delete;
+        
+        // Move constructor and assignment
+        BufferLock(BufferLock&& other) noexcept : pool_(other.pool_), buffer_(other.buffer_) {
+            other.buffer_ = nullptr;
+        }
+        BufferLock& operator=(BufferLock&& other) noexcept {
+            if (this != &other) {
+                if (buffer_) pool_->return_buffer(buffer_);
+                pool_ = other.pool_;
+                buffer_ = other.buffer_;
+                other.buffer_ = nullptr;
+            }
+            return *this;
+        }
+    };
+    
+    BufferLock get_buffer_lock(size_t size) const {
+        return BufferLock(this, size);
+    }
+};
 
 // Forward declarations
 struct ConvLayer;
@@ -267,10 +354,15 @@ struct LayerStack {
     int l2_size;
     int l3_size;
     
-    // L1 layer
+    // L1 layer (combined l1 + l1_fact for main computation)
     AlignedVector<int8_t> l1_weights;
     AlignedVector<int32_t> l1_biases;
     float l1_scale;
+    
+    // L1 factorization layer (for computing factorization outputs)
+    AlignedVector<int8_t> l1_fact_weights;
+    AlignedVector<int32_t> l1_fact_biases;
+    float l1_fact_scale;
     
     // L2 layer
     AlignedVector<int8_t> l2_weights;
@@ -291,8 +383,8 @@ struct LayerStack {
     LayerStack(LayerStack&&) = default;
     LayerStack& operator=(LayerStack&&) = default;
     
-    // Forward pass through all layers
-    float forward(const int16_t* input) const;
+    // Forward pass through all layers with layer stack index for bucket selection
+    float forward(const int16_t* input, int layer_stack_index = 0) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -321,7 +413,7 @@ struct DepthwiseSeparableConv {
     ~DepthwiseSeparableConv() = default;
     
     // Forward pass with activation
-    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, bool apply_relu = true) const;
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, bool apply_relu = true, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -356,7 +448,7 @@ struct LinearDepthwiseBlock {
     ~LinearDepthwiseBlock() = default;
     
     // Forward pass: dconv1 -> pconv+ReLU -> dconv2+ReLU -> pconv_out
-    void forward(const int8_t* input, int8_t* output, int input_h, int input_w) const;
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -370,7 +462,7 @@ struct DenseLinearDepthwiseBlock {
     ~DenseLinearDepthwiseBlock() = default;
     
     // Forward pass with optional skip connection
-    void forward(const int8_t* input, int8_t* output, int input_h, int input_w) const;
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -431,6 +523,7 @@ private:
     // Working buffers (dynamically allocated based on model)
     mutable std::vector<AlignedVector<int8_t>> intermediate_buffers_;
     mutable AlignedVector<float> final_output_;
+    mutable MemoryPool buffer_pool_;  // Memory pool for temporary allocations
 
 public:
     EtinyNetEvaluator();
@@ -601,6 +694,11 @@ namespace simd {
                              const int32_t* biases, int8_t* output,
                              int input_size, int output_size, float scale);
                              
+    // Dense layer with int8_t input (for L2 layer)
+    void dense_forward_scalar_int16(const int8_t* input, const int8_t* weights,
+                                   const int32_t* biases, int8_t* output,
+                                   int input_size, int output_size, float scale);
+    
     // Chess engine-style incremental updates (SIMD optimized)
     void add_feature_avx2(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);
     void remove_feature_avx2(int feature_idx, const int16_t* weights, int16_t* accumulator, int output_size);

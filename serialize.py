@@ -74,6 +74,9 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
     bias = conv_data["bias"]  # int32, shape (out_channels,)
     scale = conv_data["scale"]
 
+    # Write layer type first (required by C++ loader)
+    f.write(struct.pack("<I", conv_data["layer_type"]))
+
     # Write scale
     f.write(struct.pack("<f", scale))
 
@@ -94,36 +97,58 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
 
 
 def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
-    """Write quantized depthwise separable convolution layer."""
+    """Write quantized LinearDepthwiseBlock layer."""
     # Write layer type (0=DepthwiseSeparable, 1=LinearDepthwise, 2=DenseLinearDepthwise)
     f.write(struct.pack("<I", layer_data["layer_type"]))
 
-    # Write stride
-    f.write(struct.pack("<I", layer_data["stride"]))
+    # Write scales for all 4 components (required by C++ loader)
+    f.write(struct.pack("<f", layer_data["depthwise_scale"]))  # dconv1_scale
+    f.write(struct.pack("<f", layer_data["pointwise_scale"]))  # pconv_scale
+    f.write(struct.pack("<f", layer_data["depthwise2_scale"]))  # dconv2_scale
+    f.write(struct.pack("<f", layer_data["pointwise_out_scale"]))  # pconv_out_scale
 
-    # Write depthwise conv weights and bias
-    dw_weight = layer_data["depthwise_weight"]  # int8
-    dw_scale = layer_data["depthwise_scale"]
+    # Write dimensions (required by C++ loader)
+    pw_weight = layer_data["pointwise_weight"]
+    pw_out_weight = layer_data["pointwise_out_weight"]
 
-    f.write(struct.pack("<f", dw_scale))
-    f.write(struct.pack("<I", dw_weight.shape[0]))  # out_channels
-    f.write(struct.pack("<I", dw_weight.shape[1]))  # in_channels (should be 1)
-    f.write(struct.pack("<I", dw_weight.shape[2]))  # kernel_h
-    f.write(struct.pack("<I", dw_weight.shape[3]))  # kernel_w
-    f.write(dw_weight.cpu().numpy().astype("i1").tobytes())
+    in_channels = pw_weight.shape[1]  # Input channels (from pconv)
+    mid_channels = pw_weight.shape[0]  # Mid channels (from pconv output)
+    out_channels = pw_out_weight.shape[0]  # Output channels (from pconv_out)
+    stride = layer_data["stride"]
 
-    # Write pointwise conv weights and bias
-    pw_weight = layer_data["pointwise_weight"]  # int8
-    pw_bias = layer_data["pointwise_bias"]  # int32
-    pw_scale = layer_data["pointwise_scale"]
+    f.write(struct.pack("<I", in_channels))
+    f.write(struct.pack("<I", mid_channels))
+    f.write(struct.pack("<I", out_channels))
+    f.write(struct.pack("<I", stride))
 
-    f.write(struct.pack("<f", pw_scale))
-    f.write(struct.pack("<I", pw_weight.shape[0]))  # out_channels
-    f.write(struct.pack("<I", pw_weight.shape[1]))  # in_channels
+    # Write dconv1 weights (first depthwise conv)
+    dw1_weight = layer_data["depthwise_weight"]
+    dw1_weight_count = dw1_weight.shape[0] * 9  # 3x3 kernel
+    f.write(dw1_weight.cpu().numpy().astype("i1").tobytes())
+
+    # Write pconv weights (first pointwise conv)
+    pw_weight_count = mid_channels * in_channels
     f.write(pw_weight.cpu().numpy().astype("i1").tobytes())
 
+    # Write pconv biases
+    pw_bias = layer_data["pointwise_bias"]
     f.write(struct.pack("<I", pw_bias.shape[0]))
     f.write(pw_bias.cpu().numpy().astype("<i4").tobytes())
+
+    # Write dconv2 weights (second depthwise conv)
+    dw2_weight = layer_data["depthwise2_weight"]
+    dw2_weight_count = mid_channels * 9  # 3x3 kernel
+    f.write(dw2_weight.cpu().numpy().astype("i1").tobytes())
+
+    # Write pconv_out weights (final pointwise conv)
+    pw_out_weight = layer_data["pointwise_out_weight"]
+    pw_out_weight_count = out_channels * mid_channels
+    f.write(pw_out_weight.cpu().numpy().astype("i1").tobytes())
+
+    # Write pconv_out biases
+    pw_out_bias = layer_data["pointwise_out_bias"]
+    f.write(struct.pack("<I", pw_out_bias.shape[0]))
+    f.write(pw_out_bias.cpu().numpy().astype("<i4").tobytes())
 
 
 def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -132,9 +157,14 @@ def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
     bias = layer_data["bias"]  # int32
     scale = layer_data["scale"]
 
+    # Write layer type first (required by C++ loader)
+    f.write(struct.pack("<I", layer_data["layer_type"]))
+
     f.write(struct.pack("<f", scale))
-    f.write(struct.pack("<I", weight.shape[0]))  # out_features
-    f.write(struct.pack("<I", weight.shape[1]))  # in_features
+    f.write(struct.pack("<I", weight.shape[1]))  # in_features (C++ expects this first)
+    f.write(
+        struct.pack("<I", weight.shape[0])
+    )  # out_features (C++ expects this second)
     f.write(weight.cpu().numpy().astype("i1").tobytes())
 
     f.write(struct.pack("<I", bias.shape[0]))
@@ -281,8 +311,9 @@ def serialize_etinynet_model(model: EtinyNet, output_path: Path) -> None:
         # Write header
         write_etinynet_header(f, quantized_data["metadata"])
 
-        # Write number of layers
-        f.write(struct.pack("<I", len(quantized_data["layers"])))
+        # Write number of layers (including classifier)
+        total_layers = len(quantized_data["layers"]) + 1  # +1 for classifier
+        f.write(struct.pack("<I", total_layers))
 
         # Write each layer
         for layer_data in quantized_data["layers"]:
@@ -291,7 +322,7 @@ def serialize_etinynet_model(model: EtinyNet, output_path: Path) -> None:
             elif layer_data["layer_type"] in [1, 2]:  # LB or DLB
                 write_depthwise_separable_layer(f, layer_data)
 
-        # Write classifier
+        # Write classifier as final layer
         write_linear_layer(f, quantized_data["classifier"])
 
     print(f"Successfully serialized EtinyNet to {output_path}")
@@ -324,10 +355,11 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
     """Write quantized layer stack weights and biases."""
     scales = ls_data["scales"]
 
-    # Write scales
+    # Write scales (including factorization scale)
     f.write(struct.pack("<f", scales["l1"]))
     f.write(struct.pack("<f", scales["l2"]))
     f.write(struct.pack("<f", scales["output"]))
+    f.write(struct.pack("<f", scales["l1_fact"]))
 
     # L1 layer
     l1_weight = ls_data["l1_weight"]  # int8
@@ -339,6 +371,17 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
 
     f.write(struct.pack("<I", l1_bias.shape[0]))
     f.write(l1_bias.cpu().numpy().astype("<i4").tobytes())
+
+    # L1 factorization layer
+    l1_fact_weight = ls_data["l1_fact_weight"]  # int8
+    l1_fact_bias = ls_data["l1_fact_bias"]  # int32
+
+    f.write(struct.pack("<I", l1_fact_weight.shape[0]))  # output_size (L2+1)
+    f.write(struct.pack("<I", l1_fact_weight.shape[1]))  # input_size (L1)
+    f.write(l1_fact_weight.cpu().numpy().astype("i1").tobytes())
+
+    f.write(struct.pack("<I", l1_fact_bias.shape[0]))
+    f.write(l1_fact_bias.cpu().numpy().astype("<i4").tobytes())
 
     # L2 layer
     l2_weight = ls_data["l2_weight"]  # int8

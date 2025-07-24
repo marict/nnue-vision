@@ -76,6 +76,22 @@ target_link_libraries(nnue_example nnue_engine)
 add_executable(benchmark_engine benchmark_engine.cpp)
 target_link_libraries(benchmark_engine nnue_engine)
 
+# Add the EtinyNet benchmark executable
+add_executable(benchmark_etinynet_engine benchmark_etinynet_engine.cpp)
+target_link_libraries(benchmark_etinynet_engine nnue_engine)
+
+# Add the regression test executable
+add_executable(regression_test regression_test.cpp)
+target_link_libraries(regression_test nnue_engine)
+
+# Add the component validator executable
+add_executable(component_validator component_validator.cpp)
+target_link_libraries(component_validator nnue_engine)
+
+# Add the debug validator executable
+add_executable(debug_validator debug_validator.cpp)
+target_link_libraries(debug_validator nnue_engine)
+
 # Installation
 install(TARGETS nnue_engine
     LIBRARY DESTINATION lib

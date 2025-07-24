@@ -127,7 +127,10 @@ void dense_forward_scalar(const int16_t* input, const int8_t* weights,
         }
         
         // Apply scaling and clipped ReLU
-        int32_t scaled = acc / static_cast<int32_t>(scale);
+        // For quantized arithmetic: result = acc / scale, but account for quantization
+        // acc is sum of (quantized_input * quantized_weight), need to dequantize properly
+        float result = static_cast<float>(acc) / scale;
+        int32_t scaled = static_cast<int32_t>(result);
         output[out_idx] = static_cast<int8_t>(std::max(0, std::min(127, scaled)));
     }
 }

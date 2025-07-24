@@ -10,6 +10,10 @@ namespace nnue {
 ConvLayer::ConvLayer() : scale(64.0f), out_channels(0), in_channels(0), kernel_h(0), kernel_w(0) {}
 
 bool ConvLayer::load_from_stream(std::ifstream& file) {
+    // Read layer type (required by serialization format)
+    uint32_t layer_type;
+    file.read(reinterpret_cast<char*>(&layer_type), sizeof(uint32_t));
+    
     // Read scale
     file.read(reinterpret_cast<char*>(&scale), sizeof(float));
     
@@ -53,13 +57,74 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
     int output_h = (input_h + 2 - kernel_h) / stride + 1;  // With padding=1
     int output_w = (input_w + 2 - kernel_w) / stride + 1;
     
-    // Unrolled convolution for efficiency
+    // Optimized convolution: separate border from interior processing
+    
+    // Process interior pixels (no padding checks needed)
+    const int interior_start_h = 1;
+    const int interior_end_h = output_h - 1;
+    const int interior_start_w = 1; 
+    const int interior_end_w = output_w - 1;
+    
+    // Interior processing (hot path) - unrolled for 3x3 kernel
     for (int out_c = 0; out_c < out_channels; ++out_c) {
+        // Prefetch bias for this output channel
+        int32_t bias = biases[out_c];
+        
+        for (int out_h = interior_start_h; out_h < interior_end_h; ++out_h) {
+            for (int out_w = interior_start_w; out_w < interior_end_w; ++out_w) {
+                int32_t acc = bias;
+                
+                // Unrolled 3x3 convolution (no bounds checking needed)
+                const int base_in_h = out_h * stride - 1;
+                const int base_in_w = out_w * stride - 1;
+                
+                // Manually unroll 3x3 kernel for better performance
+                for (int in_c = 0; in_c < in_channels; ++in_c) {
+                    // Row 0 (kh=0)
+                    acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 0) * 3 + 0) * in_channels + in_c];  // [0,0]
+                    acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w + 1) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 0) * 3 + 1) * in_channels + in_c];  // [0,1]
+                    acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w + 2) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 0) * 3 + 2) * in_channels + in_c];  // [0,2]
+                    
+                    // Row 1 (kh=1)
+                    const int row1_base = (base_in_h + 1) * input_w + base_in_w;
+                    acc += static_cast<int32_t>(input[row1_base * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 1) * 3 + 0) * in_channels + in_c];  // [1,0]
+                    acc += static_cast<int32_t>(input[(row1_base + 1) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 1) * 3 + 1) * in_channels + in_c];  // [1,1]
+                    acc += static_cast<int32_t>(input[(row1_base + 2) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 1) * 3 + 2) * in_channels + in_c];  // [1,2]
+                    
+                    // Row 2 (kh=2)
+                    const int row2_base = (base_in_h + 2) * input_w + base_in_w;
+                    acc += static_cast<int32_t>(input[row2_base * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 2) * 3 + 0) * in_channels + in_c];  // [2,0]
+                    acc += static_cast<int32_t>(input[(row2_base + 1) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 2) * 3 + 1) * in_channels + in_c];  // [2,1]
+                    acc += static_cast<int32_t>(input[(row2_base + 2) * in_channels + in_c] * scale) 
+                         * weights[((out_c * 3 + 2) * 3 + 2) * in_channels + in_c];  // [2,2]
+                }
+                
+                // Apply activation and quantize
+                int8_t result = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(scale))));
+                int output_idx = (out_h * output_w + out_w) * out_channels + out_c;
+                output[output_idx] = result;
+            }
+        }
+    }
+    
+    // Process border pixels (top/bottom rows, left/right columns) with bounds checking
+    for (int out_c = 0; out_c < out_channels; ++out_c) {
+        // Top and bottom rows
         for (int out_h = 0; out_h < output_h; ++out_h) {
+            if (out_h >= interior_start_h && out_h < interior_end_h) continue;  // Skip interior
+            
             for (int out_w = 0; out_w < output_w; ++out_w) {
                 int32_t acc = biases[out_c];
                 
-                // Convolution with padding
+                // Original code with bounds checking for border pixels
                 for (int kh = 0; kh < kernel_h; ++kh) {
                     for (int kw = 0; kw < kernel_w; ++kw) {
                         int in_h = out_h * stride + kh - 1;  // padding=1
@@ -76,7 +141,36 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
                     }
                 }
                 
-                // Apply activation and quantize
+                int8_t result = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(scale))));
+                int output_idx = (out_h * output_w + out_w) * out_channels + out_c;
+                output[output_idx] = result;
+            }
+        }
+        
+        // Left and right columns (excluding corners already processed)
+        for (int out_w = 0; out_w < output_w; ++out_w) {
+            if (out_w >= interior_start_w && out_w < interior_end_w) continue;  // Skip interior
+            
+            for (int out_h = interior_start_h; out_h < interior_end_h; ++out_h) {
+                int32_t acc = biases[out_c];
+                
+                // Original code with bounds checking for border pixels
+                for (int kh = 0; kh < kernel_h; ++kh) {
+                    for (int kw = 0; kw < kernel_w; ++kw) {
+                        int in_h = out_h * stride + kh - 1;  // padding=1
+                        int in_w = out_w * stride + kw - 1;
+                        
+                        if (in_h >= 0 && in_h < input_h && in_w >= 0 && in_w < input_w) {
+                            for (int in_c = 0; in_c < in_channels; ++in_c) {
+                                int input_idx = (in_h * input_w + in_w) * in_channels + in_c;
+                                int weight_idx = ((out_c * kernel_h + kh) * kernel_w + kw) * in_channels + in_c;
+                                
+                                acc += static_cast<int32_t>(input[input_idx] * scale) * weights[weight_idx];
+                            }
+                        }
+                    }
+                }
+                
                 int8_t result = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(scale))));
                 int output_idx = (out_h * output_w + out_w) * out_channels + out_c;
                 output[output_idx] = result;
@@ -217,13 +311,14 @@ void FeatureTransformer::forward_simd(const std::vector<int>& active_features, i
 }
 
 // LayerStack implementation
-LayerStack::LayerStack() : l1_size(0), l2_size(0), l3_size(0), l1_scale(64.0f), l2_scale(64.0f), output_scale(16.0f) {}
+LayerStack::LayerStack() : l1_size(0), l2_size(0), l3_size(0), l1_scale(64.0f), l1_fact_scale(64.0f), l2_scale(64.0f), output_scale(16.0f) {}
 
 bool LayerStack::load_from_stream(std::ifstream& file) {
-    // Read scales
+    // Read scales (including factorization scale)
     file.read(reinterpret_cast<char*>(&l1_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&l2_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&output_scale), sizeof(float));
+    file.read(reinterpret_cast<char*>(&l1_fact_scale), sizeof(float));
     
     // Read L1 layer
     uint32_t l1_out_size, l1_in_size;
@@ -231,7 +326,7 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&l1_in_size), sizeof(uint32_t));
     
     l1_size = l1_in_size;
-    l2_size = l1_out_size;
+    l2_size = l1_out_size - 1;  // L1 output is now l2_size + 1
     
     l1_weights.resize(l1_out_size * l1_in_size);
     file.read(reinterpret_cast<char*>(l1_weights.data()), l1_weights.size());
@@ -240,6 +335,24 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&l1_bias_count), sizeof(uint32_t));
     l1_biases.resize(l1_bias_count);
     file.read(reinterpret_cast<char*>(l1_biases.data()), l1_bias_count * sizeof(int32_t));
+    
+    // Read L1 factorization layer
+    uint32_t l1_fact_out_size, l1_fact_in_size;
+    file.read(reinterpret_cast<char*>(&l1_fact_out_size), sizeof(uint32_t));
+    file.read(reinterpret_cast<char*>(&l1_fact_in_size), sizeof(uint32_t));
+    
+    if (l1_fact_in_size != static_cast<uint32_t>(l1_size)) {
+        std::cerr << "Invalid L1 factorization layer input size: " << l1_fact_in_size << " != " << l1_size << std::endl;
+        return false;
+    }
+    
+    l1_fact_weights.resize(l1_fact_out_size * l1_fact_in_size);
+    file.read(reinterpret_cast<char*>(l1_fact_weights.data()), l1_fact_weights.size());
+    
+    uint32_t l1_fact_bias_count;
+    file.read(reinterpret_cast<char*>(&l1_fact_bias_count), sizeof(uint32_t));
+    l1_fact_biases.resize(l1_fact_bias_count);
+    file.read(reinterpret_cast<char*>(l1_fact_biases.data()), l1_fact_bias_count * sizeof(int32_t));
     
     // Read L2 layer
     uint32_t l2_out_size, l2_in_size;
@@ -282,59 +395,89 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     return file.good();
 }
 
-float LayerStack::forward(const int16_t* input) const {
-    // L1: l1_size -> l2_size with ClippedReLU
-    std::vector<int8_t> l1_output(l2_size);
+float LayerStack::forward(const int16_t* input, int layer_stack_index) const {
+    // Suppress unused parameter warning (layer_stack_index may be used in future multi-bucket scenarios)
+    (void)layer_stack_index;
+    
+
+    
+    // L1 combined layer: l1_size -> (l2_size + 1) with ClippedReLU
+    std::vector<int8_t> l1_combined_output(l2_size + 1);
     #ifdef __AVX2__
         if (simd::has_avx2()) {
             simd::dense_forward_avx2(input, l1_weights.data(), l1_biases.data(), 
-                                   l1_output.data(), l1_size, l2_size, l1_scale);
+                                   l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
         } else
     #endif
     #ifdef __ARM_NEON__
         if (simd::has_neon()) {
             simd::dense_forward_neon(input, l1_weights.data(), l1_biases.data(),
-                                   l1_output.data(), l1_size, l2_size, l1_scale);
+                                   l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
         } else
     #endif
         {
             simd::dense_forward_scalar(input, l1_weights.data(), l1_biases.data(),
-                                     l1_output.data(), l1_size, l2_size, l1_scale);
+                                     l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
         }
+    
+    // Extract l1c_out from the last component of combined output
+    float l1c_out = static_cast<float>(l1_combined_output[l2_size]) / l1_scale;
+    
+    // L1 factorization: l1_size -> (l2_size + 1) to get factorization outputs
+    std::vector<int8_t> l1_fact_output(l1_fact_biases.size());
+    simd::dense_forward_scalar(input, l1_fact_weights.data(), l1_fact_biases.data(),
+                             l1_fact_output.data(), l1_size, l1_fact_biases.size(), l1_fact_scale);
+    
+    // Extract l1f_out from the last component of factorization output
+    float l1f_out = static_cast<float>(l1_fact_output[l2_size]) / l1_fact_scale;
     
     // Apply squared concatenation: [squared(l1), original(l1)] to match Python model
     std::vector<int8_t> l1_expanded(l2_size * 2);
-    for (int i = 0; i < l2_size; ++i) {
-        // Squared part (first half) - multiply by (127/128) to match Python quantization
-        int32_t squared = static_cast<int32_t>(l1_output[i]) * static_cast<int32_t>(l1_output[i]);
+    
+    // Unroll squared concatenation by 4 for better performance
+    int i = 0;
+    for (; i <= l2_size - 4; i += 4) {
+        // Process 4 elements at once to improve instruction-level parallelism
+        
+        // Element 0
+        int32_t squared0 = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
+        squared0 = (squared0 * 127) / 128;
+        l1_expanded[i] = static_cast<int8_t>(std::max(0, std::min(127, squared0)));
+        l1_expanded[i + l2_size] = l1_combined_output[i];
+        
+        // Element 1
+        int32_t squared1 = static_cast<int32_t>(l1_combined_output[i+1]) * static_cast<int32_t>(l1_combined_output[i+1]);
+        squared1 = (squared1 * 127) / 128;
+        l1_expanded[i+1] = static_cast<int8_t>(std::max(0, std::min(127, squared1)));
+        l1_expanded[i+1 + l2_size] = l1_combined_output[i+1];
+        
+        // Element 2
+        int32_t squared2 = static_cast<int32_t>(l1_combined_output[i+2]) * static_cast<int32_t>(l1_combined_output[i+2]);
+        squared2 = (squared2 * 127) / 128;
+        l1_expanded[i+2] = static_cast<int8_t>(std::max(0, std::min(127, squared2)));
+        l1_expanded[i+2 + l2_size] = l1_combined_output[i+2];
+        
+        // Element 3
+        int32_t squared3 = static_cast<int32_t>(l1_combined_output[i+3]) * static_cast<int32_t>(l1_combined_output[i+3]);
+        squared3 = (squared3 * 127) / 128;
+        l1_expanded[i+3] = static_cast<int8_t>(std::max(0, std::min(127, squared3)));
+        l1_expanded[i+3 + l2_size] = l1_combined_output[i+3];
+    }
+    
+    // Handle remaining elements (less than 4)
+    for (; i < l2_size; ++i) {
+        int32_t squared = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
         squared = (squared * 127) / 128;  // Apply (127/128) factor
         l1_expanded[i] = static_cast<int8_t>(std::max(0, std::min(127, squared)));
-        
-        // Original part (second half)
-        l1_expanded[i + l2_size] = l1_output[i];
+        l1_expanded[i + l2_size] = l1_combined_output[i];
     }
     
     // L2: (l2_size * 2) -> l3_size with ClippedReLU
     std::vector<int8_t> l2_output(l3_size);
-    #ifdef __AVX2__
-        if (simd::has_avx2()) {
-            simd::dense_forward_avx2(reinterpret_cast<const int16_t*>(l1_expanded.data()), 
-                                   l2_weights.data(), l2_biases.data(),
+    
+    // Use the correct SIMD function for int8_t input (not int16_t!)
+    simd::dense_forward_scalar_int16(l1_expanded.data(), l2_weights.data(), l2_biases.data(),
                                    l2_output.data(), l2_size * 2, l3_size, l2_scale);
-        } else
-    #endif
-    #ifdef __ARM_NEON__
-        if (simd::has_neon()) {
-            simd::dense_forward_neon(reinterpret_cast<const int16_t*>(l1_expanded.data()),
-                                   l2_weights.data(), l2_biases.data(),
-                                   l2_output.data(), l2_size * 2, l3_size, l2_scale);
-        } else
-    #endif
-        {
-            simd::dense_forward_scalar(reinterpret_cast<const int16_t*>(l1_expanded.data()),
-                                     l2_weights.data(), l2_biases.data(),
-                                     l2_output.data(), l2_size * 2, l3_size, l2_scale);
-        }
     
     // Output: l3_size -> 1 (no activation)
     int32_t output_acc = output_biases[0];
@@ -343,7 +486,10 @@ float LayerStack::forward(const int16_t* input) const {
     }
     
     // Apply output scaling and convert to float
-    return static_cast<float>(output_acc) / output_scale;
+    float l3c = static_cast<float>(output_acc) / output_scale;
+    
+    // Add factorization outputs: l3x_ = l3c_ + l1f_out + l1c_out
+    return l3c + l1f_out + l1c_out;
 }
 
 // NNUEEvaluator implementation
@@ -493,7 +639,7 @@ float NNUEEvaluator::evaluate(const float* image_data, int image_h, int image_w,
     }
     
     // Step 5: Pass through layer stack
-    float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data());
+    float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data(), layer_stack_index);
     
     // Step 6: Apply final scaling
     return raw_output * nnue2score_;
@@ -549,7 +695,7 @@ float NNUEEvaluator::evaluate_incremental(const std::vector<int>& current_featur
     }
     
     // Pass through layer stack
-    float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data());
+    float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data(), layer_stack_index);
     
     // Apply final scaling
     return raw_output * nnue2score_;
@@ -637,13 +783,25 @@ bool DepthwiseSeparableConv::load_from_stream(std::ifstream& file) {
 }
 
 void DepthwiseSeparableConv::forward(const int8_t* input, int8_t* output, 
-                                   int input_h, int input_w, bool apply_relu) const {
+                                   int input_h, int input_w, bool apply_relu, 
+                                   const MemoryPool* pool) const {
     // Calculate output dimensions
     int output_h = (input_h + 2 * padding - kernel_size) / stride + 1;
     int output_w = (input_w + 2 * padding - kernel_size) / stride + 1;
     
-    // Temporary buffer for depthwise output
-    std::vector<int8_t> depthwise_output(input_h * input_w * in_channels);
+    // Use memory pool for temporary buffer if provided
+    size_t depthwise_size = input_h * input_w * in_channels;
+    std::vector<int8_t> local_buffer;
+    int8_t* depthwise_output;
+    
+    std::unique_ptr<MemoryPool::BufferLock> pool_buffer;
+    if (pool) {
+        pool_buffer = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(depthwise_size));
+        depthwise_output = pool_buffer->get();
+    } else {
+        local_buffer.resize(depthwise_size);
+        depthwise_output = local_buffer.data();
+    }
     
     // Depthwise convolution: each input channel is convolved separately
     for (int c = 0; c < in_channels; ++c) {
@@ -755,15 +913,37 @@ bool LinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
     return file.good();
 }
 
-void LinearDepthwiseBlock::forward(const int8_t* input, int8_t* output, int input_h, int input_w) const {
+void LinearDepthwiseBlock::forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool) const {
     // Calculate intermediate dimensions
     int h1 = (input_h - 3 + 2) / stride + 1;  // After first depthwise conv
     int w1 = (input_w - 3 + 2) / stride + 1;
     
-    // Temporary buffers for intermediate results
-    std::vector<int8_t> dconv1_output(h1 * w1 * in_channels);
-    std::vector<int8_t> pconv_output(h1 * w1 * mid_channels);
-    std::vector<int8_t> dconv2_output(h1 * w1 * mid_channels);
+    // Use memory pool for temporary buffers if provided
+    size_t dconv1_size = h1 * w1 * in_channels;
+    size_t pconv_size = h1 * w1 * mid_channels;
+    size_t dconv2_size = h1 * w1 * mid_channels;
+    
+    std::vector<int8_t> local_dconv1, local_pconv, local_dconv2;
+    int8_t* dconv1_output;
+    int8_t* pconv_output;
+    int8_t* dconv2_output;
+    
+    std::unique_ptr<MemoryPool::BufferLock> pool_buffer1, pool_buffer2, pool_buffer3;
+    if (pool) {
+        pool_buffer1 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(dconv1_size));
+        pool_buffer2 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(pconv_size));
+        pool_buffer3 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(dconv2_size));
+        dconv1_output = pool_buffer1->get();
+        pconv_output = pool_buffer2->get();
+        dconv2_output = pool_buffer3->get();
+    } else {
+        local_dconv1.resize(dconv1_size);
+        local_pconv.resize(pconv_size);
+        local_dconv2.resize(dconv2_size);
+        dconv1_output = local_dconv1.data();
+        pconv_output = local_pconv.data();
+        dconv2_output = local_dconv2.data();
+    }
     
     // 1. First depthwise conv (no activation - linear)
     for (int c = 0; c < in_channels; ++c) {
@@ -868,9 +1048,9 @@ bool DenseLinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
     return linear_block.load_from_stream(file);
 }
 
-void DenseLinearDepthwiseBlock::forward(const int8_t* input, int8_t* output, int input_h, int input_w) const {
-    // Run the linear block
-    linear_block.forward(input, output, input_h, input_w);
+void DenseLinearDepthwiseBlock::forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool) const {
+    // Run the linear block with memory pool
+    linear_block.forward(input, output, input_h, input_w, pool);
     
     // Add skip connection if enabled and dimensions match
     if (use_skip_connection && linear_block.in_channels == linear_block.out_channels && linear_block.stride == 1) {
@@ -1026,18 +1206,18 @@ bool EtinyNetEvaluator::load_layers(std::ifstream& file) {
         info.type = static_cast<EtinyNetLayerType>(layer_type);
         
         switch (layer_type) {
-            case 0: { // DepthwiseSeparableConv (STANDARD_CONV)
-                auto layer = std::make_unique<DepthwiseSeparableConv>();
+            case 0: { // ConvLayer (STANDARD_CONV)
+                auto layer = std::make_unique<ConvLayer>();
                 if (!layer->load_from_stream(file)) {
-                    std::cerr << "Failed to load DepthwiseSeparableConv layer " << i << std::endl;
+                    std::cerr << "Failed to load ConvLayer layer " << i << std::endl;
                     return false;
                 }
                 
-                info.index = static_cast<int>(ds_layers_.size());
+                info.index = static_cast<int>(conv_layers_.size());
                 // Note: output dimensions would be calculated during layer execution
                 info.output_h = info.output_w = info.output_c = 0;  // To be calculated
                 
-                ds_layers_.emplace_back(std::move(layer));
+                conv_layers_.emplace_back(std::move(layer));
                 layer_sequence_.emplace_back(info);
                 break;
             }
@@ -1113,11 +1293,16 @@ void EtinyNetEvaluator::calculate_layer_dimensions() {
     for (auto& layer_info : layer_sequence_) {
         switch (layer_info.type) {
             case EtinyNetLayerType::STANDARD_CONV: {
-                if (layer_info.index < static_cast<int>(ds_layers_.size())) {
-                    const auto& layer = ds_layers_[layer_info.index];
+                if (layer_info.index < static_cast<int>(conv_layers_.size())) {
+                    const auto& layer = conv_layers_[layer_info.index];
                     
-                    int out_h = (current_h + 2 * layer->padding - layer->kernel_size) / layer->stride + 1;
-                    int out_w = (current_w + 2 * layer->padding - layer->kernel_size) / layer->stride + 1;
+                    // Standard conv: stride=2, padding=1, kernel=3 for initial conv  
+                    int stride = 2;  
+                    int padding = 1;
+                    int kernel = 3;
+                    
+                    int out_h = (current_h + 2 * padding - kernel) / stride + 1;
+                    int out_w = (current_w + 2 * padding - kernel) / stride + 1;
                     int out_c = layer->out_channels;
                     
                     layer_info.output_h = out_h;
@@ -1223,16 +1408,22 @@ void EtinyNetEvaluator::evaluate(const float* image_data, float* output, int ima
     for (const auto& layer_info : layer_sequence_) {
         switch (layer_info.type) {
             case EtinyNetLayerType::STANDARD_CONV: {
-                if (layer_info.index < static_cast<int>(ds_layers_.size())) {
-                    const auto& layer = ds_layers_[layer_info.index];
+                if (layer_info.index < static_cast<int>(conv_layers_.size())) {
+                    const auto& layer = conv_layers_[layer_info.index];
                     
-                    // Calculate output dimensions
-                    int out_h = (current_h + 2 * layer->padding - layer->kernel_size) / layer->stride + 1;
-                    int out_w = (current_w + 2 * layer->padding - layer->kernel_size) / layer->stride + 1;
+                    // Calculate output dimensions for standard convolution
+                    // Assuming kernel=3, padding=1, stride=2 for initial conv
+                    int stride = 2;  // EtinyNet initial conv has stride 2
+                    int padding = 1;
+                    int kernel = 3;
+                    
+                    int out_h = (current_h + 2 * padding - kernel) / stride + 1;
+                    int out_w = (current_w + 2 * padding - kernel) / stride + 1;
                     int out_c = layer->out_channels;
                     
                     next_data.resize(out_h * out_w * out_c);
-                    layer->forward(current_data.data(), next_data.data(), current_h, current_w, true);
+                    // ConvLayer expects float input, not quantized int8
+                    layer->forward(image_data, next_data.data(), current_h, current_w, stride);
                     
                     current_data = std::move(next_data);
                     current_h = out_h;
@@ -1252,7 +1443,7 @@ void EtinyNetEvaluator::evaluate(const float* image_data, float* output, int ima
                     int out_c = layer->out_channels;
                     
                     next_data.resize(out_h * out_w * out_c);
-                    layer->forward(current_data.data(), next_data.data(), current_h, current_w);
+                    layer->forward(current_data.data(), next_data.data(), current_h, current_w, &buffer_pool_);
                     
                     current_data = std::move(next_data);
                     current_h = out_h;
@@ -1272,7 +1463,7 @@ void EtinyNetEvaluator::evaluate(const float* image_data, float* output, int ima
                     int out_c = layer->linear_block.out_channels;
                     
                     next_data.resize(out_h * out_w * out_c);
-                    layer->forward(current_data.data(), next_data.data(), current_h, current_w);
+                    layer->forward(current_data.data(), next_data.data(), current_h, current_w, &buffer_pool_);
                     
                     current_data = std::move(next_data);
                     current_h = out_h;

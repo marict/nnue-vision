@@ -10,7 +10,7 @@ import torch
 
 from model import NNUE, FeatureTransformer, GridFeatureSet, LayerStacks
 from serialize import serialize_model
-from tests.conftest import assert_model_output_valid, assert_tensor_shape
+from tests.conftest import assert_model_output_valid
 
 
 def assert_gradients_exist(model):

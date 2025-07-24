@@ -6,14 +6,23 @@ from typing import Optional
 
 import pytorch_lightning as pl
 import torch
-import wandb
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 
+import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
 from model import NNUE, LossParams
+from training_utils import (
+    check_disk_space_emergency,
+    cleanup_disk_space_emergency,
+    early_log,
+    get_disk_usage_percent,
+    log_git_commit_info,
+    log_git_info_to_wandb,
+    replay_early_logs_to_wandb,
+)
 
 
 def adapt_batch_for_nnue(batch, num_ls_buckets=8):
@@ -149,6 +158,22 @@ class WandbMetricsCallback(pl.Callback):
                     "system/gpu_memory_reserved_gb": memory_reserved,
                 }
             )
+
+        # Log disk usage periodically (every 10 steps to avoid overhead)
+        if trainer.global_step % 10 == 0:
+            disk_usage = get_disk_usage_percent()
+            wandb.log({"system/disk_usage_percent": disk_usage})
+
+            # Check for disk space emergency
+            if check_disk_space_emergency(
+                threshold=90.0
+            ):  # Lower threshold for warnings
+                wandb.log({"alerts/disk_space_warning": True})
+                print("⚠️  Warning: Disk space is getting low!")
+
+                if disk_usage > 95.0:  # Critical threshold
+                    wandb.log({"alerts/disk_space_critical": True})
+                    cleanup_disk_space_emergency()
 
     def on_train_epoch_end(self, trainer, pl_module):
         """Log epoch timing and training progress."""
@@ -342,6 +367,20 @@ class NNUEWrapper(pl.LightningModule):
 
 
 def main():
+    # Early logging and system info
+    early_log("🚀 Starting NNUE-Vision training...")
+    early_log(f"📊 Disk usage: {get_disk_usage_percent():.1f}%")
+
+    # Check for disk space emergencies early
+    if check_disk_space_emergency():
+        early_log("⚠️  Disk space is critically low!")
+        cleaned_mb = cleanup_disk_space_emergency()
+        early_log(f"🧹 Emergency cleanup freed {cleaned_mb:.1f} MB")
+
+    # Log git information for debugging and tracking
+    early_log("📝 Git repository information:")
+    log_git_commit_info()
+
     parser = argparse.ArgumentParser(
         description="Train CNN on Visual Wake Words dataset with config file support"
     )
@@ -381,11 +420,11 @@ def main():
 
     # Load configuration
     try:
-        print(f"Loading configuration from: {args.config}")
+        early_log(f"⚙️  Loading configuration from: {args.config}")
         config = load_config(args.config)
-        print(f"Configuration loaded: {config.name}")
+        early_log(f"✅ Configuration loaded: {config.name}")
     except ConfigError as e:
-        print(f"Error loading configuration: {e}")
+        early_log(f"❌ Error loading configuration: {e}")
         return 1
 
     # Override config with command line arguments if provided
@@ -405,8 +444,10 @@ def main():
 
     use_wandb = getattr(config, "use_wandb", True)
     if use_wandb and not os.getenv("WANDB_API_KEY"):
-        print("Warning: WANDB_API_KEY not found. Wandb logging may not work properly.")
-        print("Set the environment variable or use --wandb_api_key argument.")
+        early_log(
+            "⚠️  Warning: WANDB_API_KEY not found. Wandb logging may not work properly."
+        )
+        early_log("💡 Set the environment variable or use --wandb_api_key argument.")
 
     # Set random seed for reproducibility
     pl.seed_everything(getattr(config, "seed", 42))
@@ -430,7 +471,7 @@ def main():
     model = NNUEWrapper(nnue_model)
 
     # Create data loaders
-    print("Creating data loaders...")
+    early_log("📚 Creating data loaders...")
     train_loader, val_loader, test_loader = create_data_loaders(
         batch_size=getattr(config, "batch_size", 32),
         num_workers=getattr(config, "num_workers", 4),
@@ -448,6 +489,13 @@ def main():
     if use_wandb:
         wandb_logger = setup_wandb_logger(config)
         loggers.append(wandb_logger)
+
+        # Log git information to wandb for experiment tracking
+        early_log("📤 Logging git information to W&B...")
+        log_git_info_to_wandb(wandb_logger.experiment)
+
+        # Replay early logs to wandb
+        replay_early_logs_to_wandb()
 
     # Optional TensorBoard logger
     use_tensorboard = getattr(config, "use_tensorboard", False)
@@ -552,6 +600,21 @@ def main():
         wandb.log_artifact(artifact)
 
     print("Training completed!")
+
+    # Log final system information
+    final_disk_usage = get_disk_usage_percent()
+    print(f"📊 Final disk usage: {final_disk_usage:.1f}%")
+
+    if use_wandb:
+        # Log final system stats to wandb
+        wandb.log(
+            {
+                "final/disk_usage_percent": final_disk_usage,
+                "final/training_completed": True,
+            }
+        )
+
+        print("🎯 Training metrics and git info logged to W&B")
 
     # Finish wandb run if used
     if use_wandb:
