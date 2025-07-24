@@ -609,9 +609,11 @@ class TestBaselineComparison:
             ratios = comparison["nnue_vs_baseline"]
 
             # NNUE should be better in this test case
-            assert ratios["accuracy_ratio"] > 1.0  # Better accuracy
-            assert ratios["latency_ratio"] > 1.0  # Faster
-            assert ratios["energy_ratio"] > 1.0  # More efficient
+            assert ratios["accuracy_ratio"] > 1.0  # Better accuracy (higher is better)
+            assert ratios["latency_ratio"] < 1.0  # Faster (lower latency is better)
+            assert (
+                ratios["energy_ratio"] < 1.0
+            )  # More efficient (lower energy is better)
 
         finally:
             # Restore original baselines

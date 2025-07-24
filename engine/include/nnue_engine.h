@@ -390,33 +390,7 @@ struct LayerStack {
 };
 
 // ===== EtinyNet Components =====
-
-// Depthwise separable convolution for EtinyNet
-struct DepthwiseSeparableConv {
-    // Depthwise convolution weights (groups = in_channels)
-    AlignedVector<int8_t> depthwise_weights;
-    float depthwise_scale;
-    
-    // Pointwise convolution weights and biases (1x1 conv)
-    AlignedVector<int8_t> pointwise_weights;
-    AlignedVector<int32_t> pointwise_biases;
-    float pointwise_scale;
-    
-    // Architecture parameters
-    int in_channels;
-    int out_channels;
-    int kernel_size;
-    int stride;
-    int padding;
-    
-    DepthwiseSeparableConv();
-    ~DepthwiseSeparableConv() = default;
-    
-    // Forward pass with activation
-    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, bool apply_relu = true, const MemoryPool* pool = nullptr) const;
-    
-    bool load_from_stream(std::ifstream& file);
-};
+// (DepthwiseSeparableConv support was removed – EtinyNet now uses only Conv + LB/DLB)
 
 // Linear Depthwise Block (LB) from EtinyNet paper
 struct LinearDepthwiseBlock {
@@ -507,7 +481,7 @@ private:
     
     // Network layers (stored in execution order)
     std::vector<std::unique_ptr<ConvLayer>> conv_layers_;
-    std::vector<std::unique_ptr<DepthwiseSeparableConv>> ds_layers_;
+    // Removed ds_layers_ (depth-wise separable convs) – no longer used
     std::vector<std::unique_ptr<LinearDepthwiseBlock>> lb_layers_;
     std::vector<std::unique_ptr<DenseLinearDepthwiseBlock>> dlb_layers_;
     std::unique_ptr<LinearLayer> classifier_;

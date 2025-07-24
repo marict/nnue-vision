@@ -107,6 +107,8 @@ bool test_feature_transformer() {
     
     // Initialize with dummy data
     ft.scale = FT_SCALE;
+    ft.num_features = GRID_FEATURES;
+    ft.output_size = L1_SIZE;
     ft.weights.resize(GRID_FEATURES * L1_SIZE);
     ft.biases.resize(L1_SIZE);
     
@@ -141,13 +143,19 @@ bool test_layer_stack() {
     LayerStack ls;
     
     // Initialize with dummy data
+    ls.l1_size = L1_SIZE;
+    ls.l2_size = L2_SIZE;
+    ls.l3_size = L3_SIZE;
     ls.l1_scale = HIDDEN_SCALE;
+    ls.l1_fact_scale = HIDDEN_SCALE;
     ls.l2_scale = HIDDEN_SCALE;
     ls.output_scale = OUTPUT_SCALE;
     
-    ls.l1_weights.resize(L2_SIZE * L1_SIZE);
-    ls.l1_biases.resize(L2_SIZE);
-    ls.l2_weights.resize(L3_SIZE * L2_SIZE);
+    ls.l1_weights.resize((L2_SIZE + 1) * L1_SIZE);  // +1 for combined output
+    ls.l1_biases.resize(L2_SIZE + 1);
+    ls.l1_fact_weights.resize((L2_SIZE + 1) * L1_SIZE);  // Factorization weights
+    ls.l1_fact_biases.resize(L2_SIZE + 1);
+    ls.l2_weights.resize(L3_SIZE * L2_SIZE * 2);  // *2 for squared concatenation
     ls.l2_biases.resize(L3_SIZE);
     ls.output_weights.resize(1 * L3_SIZE);
     ls.output_biases.resize(1);
@@ -155,6 +163,8 @@ bool test_layer_stack() {
     // Fill with small test values
     std::fill(ls.l1_weights.data(), ls.l1_weights.data() + ls.l1_weights.size(), 1);
     std::fill(ls.l1_biases.data(), ls.l1_biases.data() + ls.l1_biases.size(), 100);
+    std::fill(ls.l1_fact_weights.data(), ls.l1_fact_weights.data() + ls.l1_fact_weights.size(), 1);
+    std::fill(ls.l1_fact_biases.data(), ls.l1_fact_biases.data() + ls.l1_fact_biases.size(), 100);
     std::fill(ls.l2_weights.data(), ls.l2_weights.data() + ls.l2_weights.size(), 1);
     std::fill(ls.l2_biases.data(), ls.l2_biases.data() + ls.l2_biases.size(), 100);
     std::fill(ls.output_weights.data(), ls.output_weights.data() + ls.output_weights.size(), 1);
@@ -405,8 +415,11 @@ void benchmark_optimizations() {
         stack.output_scale = 16.0f;
         
         // Initialize weights and biases
-        stack.l1_weights.resize(stack.l2_size * stack.l1_size);
-        stack.l1_biases.resize(stack.l2_size);
+        stack.l1_fact_scale = 64.0f;
+        stack.l1_weights.resize((stack.l2_size + 1) * stack.l1_size);
+        stack.l1_biases.resize(stack.l2_size + 1);
+        stack.l1_fact_weights.resize((stack.l2_size + 1) * stack.l1_size);
+        stack.l1_fact_biases.resize(stack.l2_size + 1);
         stack.l2_weights.resize(stack.l3_size * stack.l2_size * 2);  // *2 for concatenation
         stack.l2_biases.resize(stack.l3_size);
         stack.output_weights.resize(stack.l3_size);
@@ -418,6 +431,12 @@ void benchmark_optimizations() {
         }
         for (size_t i = 0; i < stack.l1_biases.size(); ++i) {
             stack.l1_biases[i] = 100;
+        }
+        for (size_t i = 0; i < stack.l1_fact_weights.size(); ++i) {
+            stack.l1_fact_weights[i] = static_cast<int8_t>((i % 127) - 64);
+        }
+        for (size_t i = 0; i < stack.l1_fact_biases.size(); ++i) {
+            stack.l1_fact_biases[i] = 100;
         }
         for (size_t i = 0; i < stack.l2_weights.size(); ++i) {
             stack.l2_weights[i] = static_cast<int8_t>((i % 127) - 64);

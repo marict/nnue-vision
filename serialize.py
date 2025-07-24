@@ -12,6 +12,7 @@ import struct
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import torch
 
 from model import NNUE, EtinyNet, GridFeatureSet
@@ -74,8 +75,8 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
     bias = conv_data["bias"]  # int32, shape (out_channels,)
     scale = conv_data["scale"]
 
-    # Write layer type first (required by C++ loader)
-    f.write(struct.pack("<I", conv_data["layer_type"]))
+    # Write inner layer type identifier for ConvLayer as expected by C++ loader
+    f.write(struct.pack("<I", 0))  # 0 = STANDARD_CONV
 
     # Write scale
     f.write(struct.pack("<f", scale))
@@ -98,8 +99,6 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
 
 def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
     """Write quantized LinearDepthwiseBlock layer."""
-    # Write layer type (0=DepthwiseSeparable, 1=LinearDepthwise, 2=DenseLinearDepthwise)
-    f.write(struct.pack("<I", layer_data["layer_type"]))
 
     # Write scales for all 4 components (required by C++ loader)
     f.write(struct.pack("<f", layer_data["depthwise_scale"]))  # dconv1_scale
@@ -157,17 +156,18 @@ def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
     bias = layer_data["bias"]  # int32
     scale = layer_data["scale"]
 
-    # Write layer type first (required by C++ loader)
-    f.write(struct.pack("<I", layer_data["layer_type"]))
-
+    # Write scale
     f.write(struct.pack("<f", scale))
-    f.write(struct.pack("<I", weight.shape[1]))  # in_features (C++ expects this first)
-    f.write(
-        struct.pack("<I", weight.shape[0])
-    )  # out_features (C++ expects this second)
+
+    # Write dimensions (in_features, out_features)
+    f.write(struct.pack("<I", weight.shape[1]))  # in_features
+    f.write(struct.pack("<I", weight.shape[0]))  # out_features
+
+    # Write weights (int8, little endian)
     f.write(weight.cpu().numpy().astype("i1").tobytes())
 
-    f.write(struct.pack("<I", bias.shape[0]))
+    # Write bias dimensions and data
+    f.write(struct.pack("<I", bias.shape[0]))  # Should equal out_features
     f.write(bias.cpu().numpy().astype("<i4").tobytes())
 
 
@@ -178,6 +178,22 @@ def quantize_conv_layer(conv_layer, scale=64.0):
         conv_layer.bias.data
         if conv_layer.bias is not None
         else torch.zeros(conv_layer.out_channels)
+    )
+
+    # Quantize weights to int8
+    weight_q = torch.round(weight * scale).clamp(-127, 127).to(torch.int8)
+    bias_q = torch.round(bias * scale).to(torch.int32)
+
+    return {"weight": weight_q, "bias": bias_q, "scale": scale}
+
+
+def quantize_linear_layer(linear_layer, scale=64.0):
+    """Quantize a linear layer."""
+    weight = linear_layer.weight.data
+    bias = (
+        linear_layer.bias.data
+        if linear_layer.bias is not None
+        else torch.zeros(linear_layer.out_features)
     )
 
     # Quantize weights to int8
@@ -262,32 +278,36 @@ def get_etinynet_quantized_data(model: EtinyNet):
     # Extract and quantize layers from each stage
     layers = []
 
-    # Initial conv + ReLU is in stage1
-    stage1_modules = list(model.stage1.modules())
-    initial_conv = stage1_modules[1]  # First module is Sequential, second is Conv2d
+    # Stage 1: Extract initial conv layer and LinearDepthwiseBlocks
+    # stage1 structure: Sequential(Conv2d, ReLU, MaxPool2d, LinearDepthwiseBlock, LinearDepthwiseBlock, ...)
+    stage1_list = list(model.stage1.children())
+
+    # Initial conv layer (first module in stage1)
+    initial_conv = stage1_list[0]  # Conv2d
     initial_conv_data = quantize_conv_layer(initial_conv)
     initial_conv_data["layer_type"] = 0  # Standard conv
     layers.append(initial_conv_data)
 
-    # Extract LB blocks from stage1 (skip conv and ReLU and maxpool)
-    for module in stage1_modules[4:]:  # Skip Sequential, Conv2d, ReLU, MaxPool2d
-        if isinstance(module, (torch.nn.modules.module.Module)) and hasattr(
-            module, "dconv1"
-        ):
+    # Extract LinearDepthwiseBlocks from stage1 (skip Conv2d, ReLU, MaxPool2d)
+    for module in stage1_list[3:]:  # Skip Conv2d, ReLU, MaxPool2d
+        if hasattr(module, "dconv1"):  # LinearDepthwiseBlock
             layer_data = quantize_linear_depthwise_block(module)
             layers.append(layer_data)
 
-    # Extract blocks from other stages
+    # Extract blocks from stage2, stage3, stage4
     for stage in [model.stage2, model.stage3, model.stage4]:
-        for module in stage.modules():
-            if hasattr(module, "dconv1") or hasattr(module, "linear_block"):
+        for module in stage.children():  # Use .children() not .modules()
+            if hasattr(module, "dconv1"):  # LinearDepthwiseBlock
+                layer_data = quantize_linear_depthwise_block(module)
+                layers.append(layer_data)
+            elif hasattr(module, "linear_block"):  # DenseLinearDepthwiseBlock
                 layer_data = quantize_linear_depthwise_block(module)
                 layers.append(layer_data)
 
     quantized_data["layers"] = layers
 
-    # Quantize classifier
-    classifier_data = quantize_conv_layer(model.classifier)  # Linear acts like 1x1 conv
+    # Quantize classifier (Linear layer, not conv)
+    classifier_data = quantize_linear_layer(model.classifier)
     classifier_data["layer_type"] = 3  # Linear layer
     quantized_data["classifier"] = classifier_data
 
@@ -317,12 +337,16 @@ def serialize_etinynet_model(model: EtinyNet, output_path: Path) -> None:
 
         # Write each layer
         for layer_data in quantized_data["layers"]:
+            # Write the layer type identifier first
+            f.write(struct.pack("<I", layer_data["layer_type"]))
+
             if layer_data["layer_type"] == 0:  # Standard conv
                 write_conv_layer(f, layer_data)
             elif layer_data["layer_type"] in [1, 2]:  # LB or DLB
                 write_depthwise_separable_layer(f, layer_data)
 
-        # Write classifier as final layer
+        # Write classifier as final layer (preceded by its type id)
+        f.write(struct.pack("<I", quantized_data["classifier"]["layer_type"]))
         write_linear_layer(f, quantized_data["classifier"])
 
     print(f"Successfully serialized EtinyNet to {output_path}")
@@ -700,6 +724,82 @@ def infer_architecture_from_state_dict(
         l2_size = l2_weight_shape[1] // 2  # Account for squared concatenation
 
     return feature_set, l1_size, l2_size, l3_size, num_ls_buckets
+
+
+def run_etinynet_cpp(model_path: Path, image: torch.Tensor) -> np.ndarray:  # type: ignore
+    """Run the C++ EtinyNet engine on a single image and return logits.
+
+    This helper builds the `etinynet_inference` executable if necessary and
+    invokes it to get the engine output for comparison with PyTorch.
+
+    Args:
+        model_path: Path to .etiny model file.
+        image: 3×H×W image tensor in 0-1 range (float32, on CPU).
+
+    Returns:
+        NumPy array of logits from the C++ engine.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    # Ensure image is on CPU and contiguous
+    image_cpu = image.detach().to(torch.float32).cpu().contiguous()
+    h, w = image_cpu.shape[1:]
+
+    # Write image to temporary binary file (float32 little-endian)
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f_img:
+        img_path = Path(f_img.name)
+        f_img.write(image_cpu.numpy().tobytes())
+
+    # Build the executable if it does not exist
+    exec_path = Path("engine/build/etinynet_inference")
+    if not exec_path.exists():
+        # Trigger CMake build (assumes build directory already configured)
+        build_cmd = ["cmake", "-S", "engine", "-B", "engine/build"]
+        subprocess.run(build_cmd, check=True)
+        build_cmd = [
+            "cmake",
+            "--build",
+            "engine/build",
+            "--target",
+            "etinynet_inference",
+        ]
+        result = subprocess.run(build_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to build etinynet_inference executable: {result.stderr}"
+            )
+
+    # Run the executable
+    run_cmd = [
+        str(exec_path),
+        str(model_path),
+        str(img_path),
+        str(h),
+        str(w),
+    ]
+    result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"EtinyNet engine failed: {result.stderr}")
+
+    # Parse results
+    logits = []
+    for line in result.stdout.splitlines():
+        if line.startswith("RESULT_"):
+            parts = line.split(":")
+            if len(parts) == 2:
+                value = float(parts[1].strip())
+                logits.append(value)
+    if not logits:
+        raise RuntimeError("No RESULT_ lines found in engine output")
+
+    # Clean up temp file
+    img_path.unlink(missing_ok=True)
+
+    return np.array(logits, dtype=np.float32)
 
 
 def main():
