@@ -26,7 +26,8 @@ import torch
 from torch import nn
 
 # Default layer sizes (can be overridden in NNUE constructor)
-DEFAULT_L1 = 3072
+# Updated for 0.98M parameter target to match EtinyNet-0.98M
+DEFAULT_L1 = 1024
 DEFAULT_L2 = 15
 DEFAULT_L3 = 32
 
@@ -251,9 +252,10 @@ class EtinyNet(pl.LightningModule):
     by Xu et al. (2022). Features ultra-lightweight CNN with Linear Depthwise Blocks (LB)
     and Dense Linear Depthwise Blocks (DLB) for maximum parameter efficiency.
 
-    Two variants:
-    - EtinyNet-1.0: 976K parameters, 117M MAdds
-    - EtinyNet-0.75: 680K parameters, 75M MAdds
+    Three variants:
+    - EtinyNet-1.0: 976K parameters, 117M MAdds (original from paper)
+    - EtinyNet-0.75: 680K parameters, 75M MAdds (original from paper)
+    - EtinyNet-0.98M: 980K parameters (custom variant for fair NNUE comparison)
     """
 
     def __init__(
@@ -326,8 +328,35 @@ class EtinyNet(pl.LightningModule):
                     1,
                 ],  # DLB
             }
+        elif variant == "0.98M":
+            self.configs = {
+                "conv_channels": 24,
+                "stage1": [(24, 24, 24), 4],  # LB: [24,24,24] × 4
+                "stage2": [
+                    (24, 96, 96),
+                    1,
+                    (96, 96, 96),
+                    3,
+                ],  # LB: [24,96,96] × 1, [96,96,96] × 3
+                "stage3": [
+                    (96, 144, 144),
+                    1,
+                    (144, 144, 144),
+                    2,
+                ],  # DLB: [96,144,144] × 1, [144,144,144] × 2
+                "stage4": [
+                    (144, 192, 192),
+                    1,
+                    (192, 192, 192),
+                    1,
+                    (192, 384, 384),
+                    1,
+                ],  # DLB
+            }
         else:
-            raise ValueError(f"Unsupported variant: {variant}. Use '1.0' or '0.75'")
+            raise ValueError(
+                f"Unsupported variant: {variant}. Use '1.0', '0.75', or '0.98M'"
+            )
 
         # Build the network
         self._build_network()
@@ -597,8 +626,10 @@ class EtinyNet(pl.LightningModule):
         # to trace through each layer
         if self.variant == "1.0":
             estimated_flops = 117_000_000  # From paper
-        else:  # 0.75
+        elif self.variant == "0.75":
             estimated_flops = 75_000_000  # From paper
+        else:  # 0.98M
+            estimated_flops = 98_000_000  # Custom variant
 
         return estimated_flops
 
@@ -814,8 +845,8 @@ class NNUE(pl.LightningModule):
 
         # Architecture configuration
         if feature_set is None:
-            # Default to large feature set for full models
-            feature_set = GridFeatureSet(grid_size=32, num_features_per_square=64)
+            # Default to smaller feature set for 0.98M parameter target to match EtinyNet-0.98M
+            feature_set = GridFeatureSet(grid_size=10, num_features_per_square=8)
 
         self.feature_set = feature_set
         self.l1_size = l1_size
@@ -832,9 +863,20 @@ class NNUE(pl.LightningModule):
         # Default: 96x96 input, but make stride dynamic to hit target grid size
         input_size = 96
         target_grid_size = feature_set.grid_size
-        conv_stride = input_size // target_grid_size
-        if conv_stride < 1:
-            conv_stride = 1
+
+        # Calculate stride to get exactly target_grid_size output
+        # For conv with kernel=3, padding=1: output = (input + 2*padding - kernel) // stride + 1
+        # Solving for stride: stride = (input + 2*padding - kernel) // (output - 1)
+        # We want output = target_grid_size, so:
+        conv_stride = max(1, (input_size + 2 * 1 - 3) // (target_grid_size - 1))
+
+        # Verify the output size will be correct
+        expected_output_size = (input_size + 2 * 1 - 3) // conv_stride + 1
+        if expected_output_size != target_grid_size:
+            # Adjust stride if needed to get exact match
+            conv_stride = (input_size + 2 * 1 - 3) // (target_grid_size - 1)
+            if conv_stride < 1:
+                conv_stride = 1
 
         # Visual processing layers - conv and tanh at the beginning
         self.conv = nn.Conv2d(

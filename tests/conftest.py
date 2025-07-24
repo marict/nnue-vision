@@ -81,17 +81,17 @@ def tiny_grid_feature_set():
 @pytest.fixture
 def nnue_model():
     """Return an NNUE model for testing."""
-    # Use smaller architecture for faster tests
-    feature_set = GridFeatureSet(grid_size=8, num_features_per_square=12)
+    # Use smaller architecture for faster tests, consistent with new 0.98M defaults
+    feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
     return NNUE(
         feature_set=feature_set,
-        l1_size=256,  # Much smaller than default 3072
+        l1_size=128,  # Much smaller than new default 1024
         l2_size=8,  # Smaller than default 15
         l3_size=16,  # Smaller than default 32
         max_epoch=10,
         num_batches_per_epoch=100,
         lr=1e-3,
-        num_ls_buckets=4,  # Smaller for testing
+        num_ls_buckets=2,  # Smaller for testing
     )
 
 

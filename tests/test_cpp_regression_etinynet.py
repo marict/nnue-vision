@@ -101,11 +101,11 @@ class TestEtinyNetCppPyTorchRegression:
         # Should run EtinyNet component tests
         assert "EtinyNet C++ Engine Tests" in result.stdout, "Should run EtinyNet tests"
         assert (
-            "DepthwiseSeparableConv" in result.stdout
-        ), "Should test depthwise separable convolution"
-        assert (
             "LinearDepthwiseBlock" in result.stdout
         ), "Should test linear depthwise blocks"
+        assert (
+            "DenseLinearDepthwiseBlock" in result.stdout
+        ), "Should test dense linear depthwise blocks"
 
     def test_model_architecture_consistency(self, test_model_and_data, device):
         """Test that EtinyNet architecture is consistent across different inputs."""

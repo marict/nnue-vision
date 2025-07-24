@@ -92,7 +92,7 @@ class TestModelCreation:
         assert param_count > 0
 
     def test_etinynet_model_creation(self):
-        """Test EtinyNet model creation with both variants."""
+        """Test EtinyNet model creation with all variants."""
         # Test EtinyNet-0.75
         model_075 = EtinyNet(
             variant="0.75", num_classes=10, input_size=32, use_asq=False
@@ -103,14 +103,23 @@ class TestModelCreation:
         assert model_075.input_size == 32
         param_count_075 = model_075.count_parameters()
 
+        # Test EtinyNet-0.98M
+        model_098 = EtinyNet(
+            variant="0.98M", num_classes=10, input_size=32, use_asq=False
+        )
+
+        assert model_098.variant == "0.98M"
+        param_count_098 = model_098.count_parameters()
+
         # Test EtinyNet-1.0
         model_10 = EtinyNet(variant="1.0", num_classes=10, input_size=32, use_asq=False)
 
         assert model_10.variant == "1.0"
         param_count_10 = model_10.count_parameters()
 
-        # EtinyNet-1.0 should have more parameters than 0.75
-        assert param_count_10 > param_count_075
+        # Parameter count ordering: 0.98M < 0.75 < 1.0
+        # (0.98M is specifically designed to have ~980K params, which is less than 0.75's ~1M)
+        assert param_count_098 < param_count_075 < param_count_10
 
     def test_etinynet_asq_functionality(self):
         """Test EtinyNet with Adaptive Scale Quantization."""

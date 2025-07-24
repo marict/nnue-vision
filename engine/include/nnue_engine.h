@@ -10,14 +10,15 @@
 namespace nnue {
 
 // Default architecture constants (can be overridden by model file)
-constexpr int DEFAULT_L1_SIZE = 3072;
+// Updated for 0.98M parameter target to match EtinyNet-0.98M
+constexpr int DEFAULT_L1_SIZE = 1024;
 constexpr int DEFAULT_L2_SIZE = 15;
 constexpr int DEFAULT_L3_SIZE = 32;
 constexpr int DEFAULT_INPUT_CHANNELS = 3;
-constexpr int DEFAULT_OUTPUT_CHANNELS = 64;
+constexpr int DEFAULT_OUTPUT_CHANNELS = 8;  // Reduced from 64 to match smaller feature set
 constexpr int DEFAULT_CONV_KERNEL_SIZE = 3;
 constexpr int DEFAULT_INPUT_IMAGE_SIZE = 96;
-constexpr int DEFAULT_OUTPUT_GRID_SIZE = 32;
+constexpr int DEFAULT_OUTPUT_GRID_SIZE = 10;  // Reduced from 32 to match smaller feature set
 
 // Quantization constants
 constexpr float FT_SCALE = 64.0f;

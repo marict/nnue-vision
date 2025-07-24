@@ -76,7 +76,9 @@ class TestLayerStacks:
         layer_stacks.to(device)
 
         batch_size = 2
-        input_tensor = torch.randn(batch_size, 3072, device=device)
+        input_tensor = torch.randn(
+            batch_size, 1024, device=device
+        )  # Updated to new default L1 size
         bucket_indices = torch.tensor([0, 1], device=device)
 
         output = layer_stacks(input_tensor, bucket_indices)
