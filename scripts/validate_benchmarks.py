@@ -18,11 +18,15 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from benchmarks.mcu_simulation import (MCU_SPECS, count_mac_operations,
-                                       count_model_parameters,
-                                       estimate_memory_usage,
-                                       estimate_quantized_model_size,
-                                       generate_model_stats, run_mcu_benchmark)
+from benchmarks.mcu_simulation import (
+    MCU_SPECS,
+    count_mac_operations,
+    count_model_parameters,
+    estimate_memory_usage,
+    estimate_quantized_model_size,
+    generate_model_stats,
+    run_mcu_benchmark,
+)
 from benchmarks.tinyml_benchmarks import generate_tinyml_report
 from data.datasets import GenericVisionDataset
 from model import NNUE, GridFeatureSet

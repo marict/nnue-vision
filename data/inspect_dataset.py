@@ -23,8 +23,13 @@ import numpy as np
 import torch
 
 # Import from data module
-from data import (AVAILABLE_DATASETS, create_data_loaders, get_dataset_info,
-                  get_dataset_stats, print_dataset_stats)
+from data import (
+    AVAILABLE_DATASETS,
+    create_data_loaders,
+    get_dataset_info,
+    get_dataset_stats,
+    print_dataset_stats,
+)
 from data.loaders import calculate_dataset_statistics, print_loader_statistics
 
 

@@ -225,7 +225,9 @@ class TestEndToEndBenchmarkWorkflow:
 
             # Quantized size should be smaller than float model
             from benchmarks.mcu_simulation import (
-                count_model_parameters, estimate_quantized_model_size)
+                count_model_parameters,
+                estimate_quantized_model_size,
+            )
 
             quantized_size = estimate_quantized_model_size(model)
             total_params, _ = count_model_parameters(model)
@@ -502,8 +504,10 @@ class TestBenchmarkValidation:
         """Test baseline comparisons produce realistic ratios."""
         checkpoint_path, model = trained_model_checkpoint
 
-        from benchmarks.tinyml_benchmarks import (compare_with_baselines,
-                                                  run_mlperf_tiny_benchmark)
+        from benchmarks.tinyml_benchmarks import (
+            compare_with_baselines,
+            run_mlperf_tiny_benchmark,
+        )
 
         # Create minimal dataset
         dataset = GenericVisionDataset(

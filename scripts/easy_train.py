@@ -283,15 +283,26 @@ import GPUtil
 import requests
 from asciimatics.constants import DOUBLE_LINE, SINGLE_LINE
 from asciimatics.event import KeyboardEvent, MouseEvent
-from asciimatics.exceptions import (NextScene, ResizeScreenError,
-                                    StopApplication)
+from asciimatics.exceptions import NextScene, ResizeScreenError, StopApplication
 from asciimatics.scene import Scene
 from asciimatics.screen import Screen
 from asciimatics.utilities import BoxTool
+
 # Only now import the rest of the required packages
-from asciimatics.widgets import (Button, Divider, Frame, Label, Layout,
-                                 ListBox, MultiColumnListBox, PopUpDialog,
-                                 Text, TextBox, VerticalDivider, Widget)
+from asciimatics.widgets import (
+    Button,
+    Divider,
+    Frame,
+    Label,
+    Layout,
+    ListBox,
+    MultiColumnListBox,
+    PopUpDialog,
+    Text,
+    TextBox,
+    VerticalDivider,
+    Widget,
+)
 from tqdm.auto import tqdm
 
 # Specify which versions of ordo and c-chess-cli we want.

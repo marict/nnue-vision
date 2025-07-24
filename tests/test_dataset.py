@@ -4,8 +4,12 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from data import (AVAILABLE_DATASETS, get_dataset_info, get_dataset_stats,
-                  print_dataset_stats)
+from data import (
+    AVAILABLE_DATASETS,
+    get_dataset_info,
+    get_dataset_stats,
+    print_dataset_stats,
+)
 from tests.conftest import MockDataset
 
 

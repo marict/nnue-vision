@@ -8,8 +8,7 @@ import pytorch_lightning as pl
 import torch
 import wandb
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import (EarlyStopping, ModelCheckpoint,
-                                         TQDMProgressBar)
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 
 from config import ConfigError, load_config

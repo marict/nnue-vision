@@ -15,8 +15,12 @@ import torch.nn as nn
 # Add the project root to the path
 sys.path.append(str(Path(__file__).parent))
 
-from model import (AdaptiveScaleQuantization, DenseLinearDepthwiseBlock,
-                   EtinyNet, LinearDepthwiseBlock)
+from model import (
+    AdaptiveScaleQuantization,
+    DenseLinearDepthwiseBlock,
+    EtinyNet,
+    LinearDepthwiseBlock,
+)
 from serialize import serialize_etinynet_model
 
 

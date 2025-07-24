@@ -16,21 +16,29 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from benchmarks.mcu_simulation import (MCUSpecs, ModelStats, analyze_sparsity,
-                                       count_mac_operations,
-                                       count_model_parameters,
-                                       estimate_energy_consumption,
-                                       estimate_memory_usage,
-                                       estimate_quantized_model_size,
-                                       generate_model_stats, run_mcu_benchmark,
-                                       simulate_mcu_latency)
-from benchmarks.tinyml_benchmarks import (TINYML_BASELINES, BaselineComparison,
-                                          MLPerfTinyResult,
-                                          benchmark_incremental_updates,
-                                          compare_with_baselines,
-                                          evaluate_model_accuracy,
-                                          generate_tinyml_report,
-                                          run_mlperf_tiny_benchmark)
+from benchmarks.mcu_simulation import (
+    MCUSpecs,
+    ModelStats,
+    analyze_sparsity,
+    count_mac_operations,
+    count_model_parameters,
+    estimate_energy_consumption,
+    estimate_memory_usage,
+    estimate_quantized_model_size,
+    generate_model_stats,
+    run_mcu_benchmark,
+    simulate_mcu_latency,
+)
+from benchmarks.tinyml_benchmarks import (
+    TINYML_BASELINES,
+    BaselineComparison,
+    MLPerfTinyResult,
+    benchmark_incremental_updates,
+    compare_with_baselines,
+    evaluate_model_accuracy,
+    generate_tinyml_report,
+    run_mlperf_tiny_benchmark,
+)
 from data.datasets import GenericVisionDataset
 from model import NNUE, GridFeatureSet
 

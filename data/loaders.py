@@ -8,8 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from .datasets import (AVAILABLE_DATASETS, GenericVisionDataset,
-                       get_dataset_info)
+from .datasets import AVAILABLE_DATASETS, GenericVisionDataset, get_dataset_info
 
 
 def create_data_loaders(
