@@ -297,6 +297,177 @@ struct LayerStack {
     bool load_from_stream(std::ifstream& file);
 };
 
+// ===== EtinyNet Components =====
+
+// Depthwise separable convolution for EtinyNet
+struct DepthwiseSeparableConv {
+    // Depthwise convolution weights (groups = in_channels)
+    AlignedVector<int8_t> depthwise_weights;
+    float depthwise_scale;
+    
+    // Pointwise convolution weights and biases (1x1 conv)
+    AlignedVector<int8_t> pointwise_weights;
+    AlignedVector<int32_t> pointwise_biases;
+    float pointwise_scale;
+    
+    // Architecture parameters
+    int in_channels;
+    int out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    
+    DepthwiseSeparableConv();
+    ~DepthwiseSeparableConv() = default;
+    
+    // Forward pass with activation
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w, bool apply_relu = true) const;
+    
+    bool load_from_stream(std::ifstream& file);
+};
+
+// Linear Depthwise Block (LB) from EtinyNet paper
+struct LinearDepthwiseBlock {
+    // First depthwise conv (no activation after this)
+    AlignedVector<int8_t> dconv1_weights;
+    float dconv1_scale;
+    
+    // Pointwise conv (with activation)
+    AlignedVector<int8_t> pconv_weights;
+    AlignedVector<int32_t> pconv_biases;
+    float pconv_scale;
+    
+    // Second depthwise conv (with activation)
+    AlignedVector<int8_t> dconv2_weights;
+    float dconv2_scale;
+    
+    // Final pointwise conv (output)
+    AlignedVector<int8_t> pconv_out_weights;
+    AlignedVector<int32_t> pconv_out_biases;
+    float pconv_out_scale;
+    
+    // Architecture parameters
+    int in_channels;
+    int mid_channels;
+    int out_channels;
+    int stride;
+    
+    LinearDepthwiseBlock();
+    ~LinearDepthwiseBlock() = default;
+    
+    // Forward pass: dconv1 -> pconv+ReLU -> dconv2+ReLU -> pconv_out
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w) const;
+    
+    bool load_from_stream(std::ifstream& file);
+};
+
+// Dense Linear Depthwise Block (DLB) from EtinyNet paper
+struct DenseLinearDepthwiseBlock {
+    LinearDepthwiseBlock linear_block;
+    bool use_skip_connection;
+    
+    DenseLinearDepthwiseBlock();
+    ~DenseLinearDepthwiseBlock() = default;
+    
+    // Forward pass with optional skip connection
+    void forward(const int8_t* input, int8_t* output, int input_h, int input_w) const;
+    
+    bool load_from_stream(std::ifstream& file);
+};
+
+// Linear classifier layer  
+struct LinearLayer {
+    AlignedVector<int8_t> weights;
+    AlignedVector<int32_t> biases;
+    float scale;
+    
+    int in_features;
+    int out_features;
+    
+    LinearLayer();
+    ~LinearLayer() = default;
+    
+    void forward(const int8_t* input, float* output) const;
+    
+    bool load_from_stream(std::ifstream& file);
+};
+
+// EtinyNet layer types for serialization
+enum class EtinyNetLayerType {
+    STANDARD_CONV = 0,
+    LINEAR_DEPTHWISE = 1,
+    DENSE_LINEAR_DEPTHWISE = 2,
+    LINEAR_CLASSIFIER = 3
+};
+
+// Main EtinyNet evaluator
+class EtinyNetEvaluator {
+private:
+    // Architecture metadata
+    std::string variant_;
+    int num_classes_;
+    int input_size_;
+    int conv_channels_;
+    int final_channels_;
+    bool use_asq_;
+    int asq_bits_;
+    float lambda_param_;
+    
+    // Network layers (stored in execution order)
+    std::vector<std::unique_ptr<ConvLayer>> conv_layers_;
+    std::vector<std::unique_ptr<DepthwiseSeparableConv>> ds_layers_;
+    std::vector<std::unique_ptr<LinearDepthwiseBlock>> lb_layers_;
+    std::vector<std::unique_ptr<DenseLinearDepthwiseBlock>> dlb_layers_;
+    std::unique_ptr<LinearLayer> classifier_;
+    
+    // Layer execution sequence (stores layer type and index)
+    struct LayerInfo {
+        EtinyNetLayerType type;
+        int index;
+        int output_h, output_w, output_c;  // Output dimensions
+    };
+    std::vector<LayerInfo> layer_sequence_;
+    
+    // Working buffers (dynamically allocated based on model)
+    mutable std::vector<AlignedVector<int8_t>> intermediate_buffers_;
+    mutable AlignedVector<float> final_output_;
+
+public:
+    EtinyNetEvaluator();
+    ~EtinyNetEvaluator() = default;
+    
+    // Load model from .etiny file
+    bool load_model(const std::string& path);
+    
+    // Evaluate image: RGB float[H*W*3] -> class scores
+    void evaluate(const float* image_data, float* output, int image_h = 112, int image_w = 112) const;
+    
+    // Get top-1 prediction
+    int predict(const float* image_data, int image_h = 112, int image_w = 112) const;
+    
+    // Get prediction with confidence
+    std::pair<int, float> predict_with_confidence(const float* image_data, int image_h = 112, int image_w = 112) const;
+    
+    // Architecture info
+    const std::string& get_variant() const { return variant_; }
+    int get_num_classes() const { return num_classes_; }
+    int get_input_size() const { return input_size_; }
+    bool uses_asq() const { return use_asq_; }
+    
+private:
+    // Helper functions
+    void calculate_layer_dimensions();
+    void allocate_working_buffers();
+    bool load_header(std::ifstream& file);
+    bool load_layers(std::ifstream& file);
+    void quantize_input(const float* input, int8_t* output, int size) const;
+    void apply_relu_inplace(int8_t* data, int size) const;
+    void apply_global_avg_pool(const int8_t* input, int8_t* output, int h, int w, int channels) const;
+    void add_skip_connection(const int8_t* input, int8_t* output, int size) const;
+};
+
+// ===== End EtinyNet Components =====
+
 // Main NNUE evaluator with configurable architecture
 class NNUEEvaluator {
 private:

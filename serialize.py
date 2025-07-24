@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Serialize NNUE PyTorch models to .nnue format for C++ deployment.
+Serialize EtinyNet PyTorch models to .etiny format for C++ deployment.
 
-This script converts trained NNUE models to the binary format expected by
-C++ NNUE implementations, with proper quantization and optimization.
+This script converts trained NNUE and EtinyNet models to the binary formats expected by
+C++ implementations, with proper quantization and optimization.
 """
 
 import argparse
@@ -13,7 +14,7 @@ from typing import Any, Dict
 
 import torch
 
-from model import NNUE, GridFeatureSet
+from model import NNUE, EtinyNet, GridFeatureSet
 
 
 def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
@@ -38,6 +39,31 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
 
     # Visual processing parameters (new in version 2)
     f.write(struct.pack("<f", metadata["visual_threshold"]))
+
+
+def write_etinynet_header(f, metadata: Dict[str, Any]) -> None:
+    """Write the EtinyNet file header with model metadata."""
+    # Magic number for EtinyNet files (4 bytes)
+    f.write(b"ETNY")
+
+    # Version (4 bytes)
+    f.write(struct.pack("<I", 1))
+
+    # Architecture metadata
+    variant_str = metadata["variant"].encode("utf-8")
+    f.write(struct.pack("<I", len(variant_str)))
+    f.write(variant_str)  # Variant string ("1.0" or "0.75")
+
+    f.write(struct.pack("<I", metadata["num_classes"]))  # Number of classes
+    f.write(struct.pack("<I", metadata["input_size"]))  # Input image size
+    f.write(struct.pack("<I", metadata["conv_channels"]))  # Initial conv channels
+    f.write(struct.pack("<I", metadata["final_channels"]))  # Final feature channels
+
+    # Quantization parameters (if ASQ is used)
+    f.write(struct.pack("<?", metadata["use_asq"]))  # Boolean for ASQ usage
+    if metadata["use_asq"]:
+        f.write(struct.pack("<I", metadata["asq_bits"]))
+        f.write(struct.pack("<f", metadata["lambda_param"]))
 
 
 def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
@@ -65,6 +91,210 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", bias.shape[0]))  # out_channels
     bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
     f.write(bias_bytes)
+
+
+def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
+    """Write quantized depthwise separable convolution layer."""
+    # Write layer type (0=DepthwiseSeparable, 1=LinearDepthwise, 2=DenseLinearDepthwise)
+    f.write(struct.pack("<I", layer_data["layer_type"]))
+
+    # Write stride
+    f.write(struct.pack("<I", layer_data["stride"]))
+
+    # Write depthwise conv weights and bias
+    dw_weight = layer_data["depthwise_weight"]  # int8
+    dw_scale = layer_data["depthwise_scale"]
+
+    f.write(struct.pack("<f", dw_scale))
+    f.write(struct.pack("<I", dw_weight.shape[0]))  # out_channels
+    f.write(struct.pack("<I", dw_weight.shape[1]))  # in_channels (should be 1)
+    f.write(struct.pack("<I", dw_weight.shape[2]))  # kernel_h
+    f.write(struct.pack("<I", dw_weight.shape[3]))  # kernel_w
+    f.write(dw_weight.cpu().numpy().astype("i1").tobytes())
+
+    # Write pointwise conv weights and bias
+    pw_weight = layer_data["pointwise_weight"]  # int8
+    pw_bias = layer_data["pointwise_bias"]  # int32
+    pw_scale = layer_data["pointwise_scale"]
+
+    f.write(struct.pack("<f", pw_scale))
+    f.write(struct.pack("<I", pw_weight.shape[0]))  # out_channels
+    f.write(struct.pack("<I", pw_weight.shape[1]))  # in_channels
+    f.write(pw_weight.cpu().numpy().astype("i1").tobytes())
+
+    f.write(struct.pack("<I", pw_bias.shape[0]))
+    f.write(pw_bias.cpu().numpy().astype("<i4").tobytes())
+
+
+def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
+    """Write quantized linear layer (for classifier)."""
+    weight = layer_data["weight"]  # int8
+    bias = layer_data["bias"]  # int32
+    scale = layer_data["scale"]
+
+    f.write(struct.pack("<f", scale))
+    f.write(struct.pack("<I", weight.shape[0]))  # out_features
+    f.write(struct.pack("<I", weight.shape[1]))  # in_features
+    f.write(weight.cpu().numpy().astype("i1").tobytes())
+
+    f.write(struct.pack("<I", bias.shape[0]))
+    f.write(bias.cpu().numpy().astype("<i4").tobytes())
+
+
+def quantize_conv_layer(conv_layer, scale=64.0):
+    """Quantize a convolutional layer."""
+    weight = conv_layer.weight.data
+    bias = (
+        conv_layer.bias.data
+        if conv_layer.bias is not None
+        else torch.zeros(conv_layer.out_channels)
+    )
+
+    # Quantize weights to int8
+    weight_q = torch.round(weight * scale).clamp(-127, 127).to(torch.int8)
+    bias_q = torch.round(bias * scale).to(torch.int32)
+
+    return {"weight": weight_q, "bias": bias_q, "scale": scale}
+
+
+def quantize_linear_depthwise_block(block, scale=64.0):
+    """Quantize a Linear Depthwise Block."""
+    data = {}
+
+    # Determine block type
+    if hasattr(block, "linear_block"):  # DenseLinearDepthwiseBlock
+        data["layer_type"] = 2
+        actual_block = block.linear_block
+        data["use_skip"] = block.use_skip
+    else:  # LinearDepthwiseBlock
+        data["layer_type"] = 1
+        actual_block = block
+        data["use_skip"] = False
+
+    # Get stride from first depthwise conv
+    data["stride"] = actual_block.dconv1.stride[0]
+
+    # Quantize depthwise conv1 (no bias)
+    dw1_weight = actual_block.dconv1.weight.data
+    dw1_weight_q = torch.round(dw1_weight * scale).clamp(-127, 127).to(torch.int8)
+
+    data["depthwise_weight"] = dw1_weight_q
+    data["depthwise_scale"] = scale
+
+    # Quantize pointwise conv (with bias)
+    pw_weight = actual_block.pconv.weight.data
+    pw_bias = actual_block.pconv.bias.data
+    pw_weight_q = torch.round(pw_weight * scale).clamp(-127, 127).to(torch.int8)
+    pw_bias_q = torch.round(pw_bias * scale).to(torch.int32)
+
+    data["pointwise_weight"] = pw_weight_q
+    data["pointwise_bias"] = pw_bias_q
+    data["pointwise_scale"] = scale
+
+    # Quantize depthwise conv2 (no bias)
+    dw2_weight = actual_block.dconv2.weight.data
+    dw2_weight_q = torch.round(dw2_weight * scale).clamp(-127, 127).to(torch.int8)
+
+    data["depthwise2_weight"] = dw2_weight_q
+    data["depthwise2_scale"] = scale
+
+    # Quantize final pointwise conv (with bias)
+    pout_weight = actual_block.pconv_out.weight.data
+    pout_bias = actual_block.pconv_out.bias.data
+    pout_weight_q = torch.round(pout_weight * scale).clamp(-127, 127).to(torch.int8)
+    pout_bias_q = torch.round(pout_bias * scale).to(torch.int32)
+
+    data["pointwise_out_weight"] = pout_weight_q
+    data["pointwise_out_bias"] = pout_bias_q
+    data["pointwise_out_scale"] = scale
+
+    return data
+
+
+def get_etinynet_quantized_data(model: EtinyNet):
+    """Extract and quantize all EtinyNet layer data."""
+    model.eval()
+
+    quantized_data = {}
+
+    # Model metadata
+    quantized_data["metadata"] = {
+        "variant": model.variant,
+        "num_classes": model.num_classes,
+        "input_size": model.input_size,
+        "conv_channels": model.configs["conv_channels"],
+        "final_channels": model.final_channels,
+        "use_asq": model.use_asq,
+        "asq_bits": getattr(model, "asq", {}).get("bits", 4) if model.use_asq else 4,
+        "lambda_param": model.asq.lambda_param.item() if model.use_asq else 2.0,
+    }
+
+    # Extract and quantize layers from each stage
+    layers = []
+
+    # Initial conv + ReLU is in stage1
+    stage1_modules = list(model.stage1.modules())
+    initial_conv = stage1_modules[1]  # First module is Sequential, second is Conv2d
+    initial_conv_data = quantize_conv_layer(initial_conv)
+    initial_conv_data["layer_type"] = 0  # Standard conv
+    layers.append(initial_conv_data)
+
+    # Extract LB blocks from stage1 (skip conv and ReLU and maxpool)
+    for module in stage1_modules[4:]:  # Skip Sequential, Conv2d, ReLU, MaxPool2d
+        if isinstance(module, (torch.nn.modules.module.Module)) and hasattr(
+            module, "dconv1"
+        ):
+            layer_data = quantize_linear_depthwise_block(module)
+            layers.append(layer_data)
+
+    # Extract blocks from other stages
+    for stage in [model.stage2, model.stage3, model.stage4]:
+        for module in stage.modules():
+            if hasattr(module, "dconv1") or hasattr(module, "linear_block"):
+                layer_data = quantize_linear_depthwise_block(module)
+                layers.append(layer_data)
+
+    quantized_data["layers"] = layers
+
+    # Quantize classifier
+    classifier_data = quantize_conv_layer(model.classifier)  # Linear acts like 1x1 conv
+    classifier_data["layer_type"] = 3  # Linear layer
+    quantized_data["classifier"] = classifier_data
+
+    return quantized_data
+
+
+def serialize_etinynet_model(model: EtinyNet, output_path: Path) -> None:
+    """
+    Serialize an EtinyNet model to .etiny binary format.
+
+    Args:
+        model: Trained EtinyNet model
+        output_path: Path to write .etiny file
+    """
+    model.eval()
+
+    # Get quantized model data
+    quantized_data = get_etinynet_quantized_data(model)
+
+    with open(output_path, "wb") as f:
+        # Write header
+        write_etinynet_header(f, quantized_data["metadata"])
+
+        # Write number of layers
+        f.write(struct.pack("<I", len(quantized_data["layers"])))
+
+        # Write each layer
+        for layer_data in quantized_data["layers"]:
+            if layer_data["layer_type"] == 0:  # Standard conv
+                write_conv_layer(f, layer_data)
+            elif layer_data["layer_type"] in [1, 2]:  # LB or DLB
+                write_depthwise_separable_layer(f, layer_data)
+
+        # Write classifier
+        write_linear_layer(f, quantized_data["classifier"])
+
+    print(f"Successfully serialized EtinyNet to {output_path}")
 
 
 def write_feature_transformer(f, ft_data: Dict[str, Any]) -> None:
@@ -217,26 +447,168 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
         l3_size=l3_size,
         num_ls_buckets=num_ls_buckets,
     )
+
+    # Handle Lightning checkpoints by removing the 'nnue.' prefix
+    if any(key.startswith("nnue.") for key in state_dict.keys()):
+        state_dict = {
+            k.replace("nnue.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("nnue.")
+        }
+
     model.load_state_dict(state_dict)
 
     return model
+
+
+def detect_model_type(checkpoint_path: Path) -> str:
+    """Detect whether checkpoint contains NNUE or EtinyNet model."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+
+    # Get state dict
+    if "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    # Look for EtinyNet-specific layer names
+    etinynet_indicators = [
+        "stage1",
+        "stage2",
+        "stage3",
+        "stage4",
+        "global_pool",
+        "classifier",
+        "dconv1",
+        "dconv2",
+        "pconv",
+        "pconv_out",
+    ]
+
+    # Look for NNUE-specific layer names
+    nnue_indicators = [
+        "input.weight",
+        "input.bias",
+        "layer_stacks",
+        "conv.weight",
+        "nnue.input.weight",
+        "nnue.layer_stacks",
+    ]
+
+    # Check for EtinyNet patterns
+    for key in state_dict.keys():
+        for indicator in etinynet_indicators:
+            if indicator in key:
+                return "etinynet"
+
+    # Check for NNUE patterns
+    for key in state_dict.keys():
+        for indicator in nnue_indicators:
+            if indicator in key:
+                return "nnue"
+
+    # Default to NNUE if unclear
+    return "nnue"
+
+
+def load_etinynet_from_checkpoint(checkpoint_path: Path) -> EtinyNet:
+    """Load EtinyNet model from PyTorch checkpoint or state dict."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+
+    # Get state dict
+    if "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+        # Try to extract hyperparameters
+        variant = checkpoint.get("variant", "1.0")
+        num_classes = checkpoint.get("num_classes", 1000)
+        input_size = checkpoint.get("input_size", 112)
+        use_asq = checkpoint.get("use_asq", False)
+        asq_bits = checkpoint.get("asq_bits", 4)
+    else:
+        state_dict = checkpoint
+        # Use defaults - try to infer from state dict
+        variant = infer_etinynet_variant_from_state_dict(state_dict)
+        num_classes = infer_num_classes_from_state_dict(state_dict)
+        input_size = 112  # Default
+        use_asq = False  # Default
+        asq_bits = 4
+
+    # Create model
+    model = EtinyNet(
+        variant=variant,
+        num_classes=num_classes,
+        input_size=input_size,
+        use_asq=use_asq,
+        asq_bits=asq_bits,
+    )
+
+    model.load_state_dict(state_dict)
+    return model
+
+
+def infer_etinynet_variant_from_state_dict(state_dict) -> str:
+    """Infer EtinyNet variant (1.0 or 0.75) from state dict."""
+    # Look at initial conv layer output channels
+    for key in state_dict.keys():
+        if "stage1.0.weight" in key:  # Initial conv layer
+            conv_weight = state_dict[key]
+            out_channels = conv_weight.shape[0]
+            if out_channels == 32:
+                return "1.0"
+            elif out_channels == 24:
+                return "0.75"
+
+    # Default to 1.0
+    return "1.0"
+
+
+def infer_num_classes_from_state_dict(state_dict) -> int:
+    """Infer number of output classes from classifier layer."""
+    for key in state_dict.keys():
+        if "classifier.weight" in key:
+            classifier_weight = state_dict[key]
+            return classifier_weight.shape[0]
+
+    # Default to 1000 (ImageNet)
+    return 1000
+
+
+def load_model_from_checkpoint_auto(checkpoint_path: Path):
+    """Automatically detect and load NNUE or EtinyNet model."""
+    model_type = detect_model_type(checkpoint_path)
+
+    if model_type == "etinynet":
+        return load_etinynet_from_checkpoint(checkpoint_path)
+    else:
+        return load_model_from_checkpoint(checkpoint_path)
 
 
 def infer_architecture_from_state_dict(
     state_dict,
 ) -> tuple[GridFeatureSet, int, int, int, int]:
     """Infer model architecture from state dict tensor shapes."""
+
+    # Handle Lightning checkpoints with 'nnue.' prefix
+    prefix = ""
+    if "nnue.input.weight" in state_dict:
+        prefix = "nnue."
+    elif "input.weight" not in state_dict:
+        raise ValueError(
+            "Cannot find NNUE model weights in state dict. Available keys: "
+            + str(list(state_dict.keys())[:10])
+        )
+
     # Get input layer weight shape to determine feature set and L1
-    input_weight_shape = state_dict["input.weight"].shape
+    input_weight_shape = state_dict[f"{prefix}input.weight"].shape
     num_features = input_weight_shape[0]  # [num_features, L1]
     l1_size = input_weight_shape[1]
 
     # Infer number of layer stack buckets from output layer shape FIRST
-    output_weight_shape = state_dict["layer_stacks.output.weight"].shape
+    output_weight_shape = state_dict[f"{prefix}layer_stacks.output.weight"].shape
     num_ls_buckets = output_weight_shape[0]  # [num_buckets, L3]
 
     # Infer grid size and features per square from conv layer
-    conv_weight_shape = state_dict["conv.weight"].shape
+    conv_weight_shape = state_dict[f"{prefix}conv.weight"].shape
     conv_out_channels = conv_weight_shape[0]  # This should match features_per_square
 
     # Calculate grid size from total features and conv output channels
@@ -265,14 +637,14 @@ def infer_architecture_from_state_dict(
 
     # Infer L2 and L3 sizes from layer stack shapes
     # L2 size from l1_fact layer: l1_fact has shape [L2+1, L1]
-    l1_fact_weight_shape = state_dict["layer_stacks.l1_fact.weight"].shape
+    l1_fact_weight_shape = state_dict[f"{prefix}layer_stacks.l1_fact.weight"].shape
     l2_size = l1_fact_weight_shape[0] - 1  # Remove the +1 from factorization
 
     # L3 size from output layer: output has shape [num_buckets, L3]
     l3_size = output_weight_shape[1]  # L3 size
 
     # Verify with L2 layer shape (should be [L3 * num_buckets, L2 * 2])
-    l2_weight_shape = state_dict["layer_stacks.l2.weight"].shape
+    l2_weight_shape = state_dict[f"{prefix}layer_stacks.l2.weight"].shape
     expected_l2_input_size = l2_size * 2  # Due to squared concatenation
     expected_l2_output_size = l3_size * num_ls_buckets
 
@@ -289,13 +661,24 @@ def infer_architecture_from_state_dict(
 
 def main():
     """Main serialization entry point."""
-    parser = argparse.ArgumentParser(description="Serialize NNUE model to .nnue format")
+    parser = argparse.ArgumentParser(
+        description="Serialize NNUE or EtinyNet model to binary format"
+    )
     parser.add_argument("input", type=Path, help="Input model file (.pt or .ckpt)")
-    parser.add_argument("output", type=Path, help="Output .nnue file path")
+    parser.add_argument(
+        "output", type=Path, help="Output binary file path (.nnue or .etiny)"
+    )
     parser.add_argument(
         "--features",
         type=str,
         help="Feature set specification (will be auto-detected if not provided)",
+    )
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        choices=["auto", "nnue", "etinynet"],
+        default="auto",
+        help="Force specific model type (auto-detect by default)",
     )
 
     args = parser.parse_args()
@@ -303,20 +686,60 @@ def main():
     if not args.input.exists():
         raise FileNotFoundError(f"Input file not found: {args.input}")
 
-    # Load model (architecture will be auto-detected)
+    # Detect or use specified model type
+    if args.model_type == "auto":
+        model_type = detect_model_type(args.input)
+        print(f"Auto-detected model type: {model_type}")
+    else:
+        model_type = args.model_type
+        print(f"Using specified model type: {model_type}")
+
+    # Load model based on type
     print(f"Loading model from {args.input}")
-    model = load_model_from_checkpoint(args.input)
+    if model_type == "etinynet":
+        model = load_etinynet_from_checkpoint(args.input)
 
-    print(f"Detected architecture:")
-    print(
-        f"  Feature set: {model.feature_set.name} ({model.feature_set.num_features} features)"
-    )
-    print(f"  Layer sizes: {model.l1_size} -> {model.l2_size} -> {model.l3_size} -> 1")
-    print(f"  Layer stack buckets: {model.num_ls_buckets}")
+        print(f"Detected EtinyNet architecture:")
+        print(f"  Variant: EtinyNet-{model.variant}")
+        print(f"  Parameters: {model.count_parameters():,}")
+        print(f"  Estimated FLOPs: {model.count_flops():,}")
+        print(f"  Input size: {model.input_size}x{model.input_size}")
+        print(f"  Classes: {model.num_classes}")
+        print(f"  ASQ enabled: {model.use_asq}")
 
-    # Serialize to .nnue format
-    print(f"Serializing to {args.output}")
-    serialize_model(model, args.output)
+        # Determine output format
+        if args.output.suffix not in [".etiny", ".bin"]:
+            # Auto-determine extension
+            output_path = args.output.with_suffix(".etiny")
+        else:
+            output_path = args.output
+
+        # Serialize to .etiny format
+        print(f"Serializing EtinyNet to {output_path}")
+        serialize_etinynet_model(model, output_path)
+
+    else:  # NNUE model
+        model = load_model_from_checkpoint(args.input)
+
+        print(f"Detected NNUE architecture:")
+        print(
+            f"  Feature set: {model.feature_set.name} ({model.feature_set.num_features} features)"
+        )
+        print(
+            f"  Layer sizes: {model.l1_size} -> {model.l2_size} -> {model.l3_size} -> 1"
+        )
+        print(f"  Layer stack buckets: {model.num_ls_buckets}")
+
+        # Determine output format
+        if args.output.suffix not in [".nnue", ".bin"]:
+            # Auto-determine extension
+            output_path = args.output.with_suffix(".nnue")
+        else:
+            output_path = args.output
+
+        # Serialize to .nnue format
+        print(f"Serializing NNUE to {output_path}")
+        serialize_model(model, output_path)
 
     print("Serialization complete!")
 

@@ -64,6 +64,10 @@ endif()
 add_executable(test_nnue_engine tests/test_nnue_engine.cpp)
 target_link_libraries(test_nnue_engine nnue_engine)
 
+# Create EtinyNet test executable
+add_executable(test_etinynet_engine tests/test_etinynet_engine.cpp)
+target_link_libraries(test_etinynet_engine nnue_engine)
+
 # Create example executable
 add_executable(nnue_example examples/example_usage.cpp)
 target_link_libraries(nnue_example nnue_engine)
@@ -79,13 +83,14 @@ install(TARGETS nnue_engine
     PUBLIC_HEADER DESTINATION include
 )
 
-install(TARGETS test_nnue_engine nnue_example
+install(TARGETS test_nnue_engine test_etinynet_engine nnue_example
     RUNTIME DESTINATION bin
 )
 
 # Testing
 enable_testing()
 add_test(NAME NNUEEngineTests COMMAND test_nnue_engine)
+add_test(NAME EtinyNetEngineTests COMMAND test_etinynet_engine)
 
 # CPack configuration for packaging
 set(CPACK_PACKAGE_NAME "NNUEEngine")

@@ -12,5 +12,10 @@ checkpoints/
 wandb/
 lightning_logs/
 data/raw/
+benchmarks/
+benchmark_results/
+test_outputs/
+example_benchmark_results/
+
 
 .DS_Store

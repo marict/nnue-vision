@@ -11,8 +11,12 @@ Key differences from standard quantization:
 - Optimized for CPU SIMD instructions (AVX2)
 - Supports difference-based updates
 - Adapted for image classification tasks
+
+Additionally implements EtinyNet: Extremely Tiny Network for TinyML
+from "EtinyNet: Extremely Tiny Network for TinyML" by Xu et al. (2022)
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -56,6 +60,547 @@ class GridFeatureSet:
     @property
     def name(self) -> str:
         return f"Grid{self.grid_size}x{self.grid_size}_{self.num_features_per_square}"
+
+
+class DepthwiseSeparableConv2d(nn.Module):
+    """
+    Depthwise separable convolution implementation for EtinyNet.
+    Consists of depthwise convolution followed by pointwise convolution.
+    """
+
+    def __init__(
+        self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True
+    ):
+        super().__init__()
+
+        # Depthwise convolution: each input channel is convolved separately
+        self.depthwise = nn.Conv2d(
+            in_channels,
+            in_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=in_channels,
+            bias=False,
+        )
+
+        # Pointwise convolution: 1x1 convolution to combine channels
+        self.pointwise = nn.Conv2d(
+            in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=bias
+        )
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+
+
+class LinearDepthwiseBlock(nn.Module):
+    """
+    Linear Depthwise Block (LB) from EtinyNet paper.
+
+    Structure: depthwise conv -> pointwise conv -> depthwise conv
+    Key insight: No ReLU after first depthwise conv to preserve information flow
+    and enable higher parameter efficiency.
+    """
+
+    def __init__(self, in_channels, mid_channels, out_channels, stride=1):
+        super().__init__()
+
+        # First depthwise convolution (no activation after this)
+        self.dconv1 = nn.Conv2d(
+            in_channels,
+            in_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            groups=in_channels,
+            bias=False,
+        )
+
+        # Pointwise convolution to change channel dimension
+        self.pconv = nn.Conv2d(
+            in_channels, mid_channels, kernel_size=1, stride=1, padding=0, bias=True
+        )
+
+        # Second depthwise convolution
+        self.dconv2 = nn.Conv2d(
+            mid_channels,
+            mid_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=mid_channels,
+            bias=False,
+        )
+
+        # Final pointwise to get output channels
+        self.pconv_out = nn.Conv2d(
+            mid_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=True
+        )
+
+        # ReLU activation (only after pointwise and final depthwise)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # First depthwise (no activation - linear)
+        out = self.dconv1(x)
+
+        # Pointwise with ReLU
+        out = self.pconv(out)
+        out = self.relu(out)
+
+        # Second depthwise with ReLU
+        out = self.dconv2(out)
+        out = self.relu(out)
+
+        # Final pointwise
+        out = self.pconv_out(out)
+
+        return out
+
+
+class DenseLinearDepthwiseBlock(nn.Module):
+    """
+    Dense Linear Depthwise Block (DLB) from EtinyNet paper.
+
+    Same as LinearDepthwiseBlock but with dense connection (skip connection).
+    Used only at higher stages to save memory consumption.
+    """
+
+    def __init__(self, in_channels, mid_channels, out_channels, stride=1):
+        super().__init__()
+
+        self.linear_block = LinearDepthwiseBlock(
+            in_channels, mid_channels, out_channels, stride
+        )
+
+        # Skip connection (only if input and output channels match and stride=1)
+        self.use_skip = in_channels == out_channels and stride == 1
+
+    def forward(self, x):
+        out = self.linear_block(x)
+
+        if self.use_skip:
+            out = out + x  # Dense connection
+
+        return out
+
+
+class AdaptiveScaleQuantization(nn.Module):
+    """
+    Adaptive Scale Quantization (ASQ) from EtinyNet paper.
+
+    Novel quantization method that uses learnable λ parameter to balance
+    quantization error and information entropy for aggressive low-bit quantization.
+    """
+
+    def __init__(self, bits=4, init_lambda=2.0):
+        super().__init__()
+
+        self.bits = bits
+        self.register_parameter("lambda_param", nn.Parameter(torch.tensor(init_lambda)))
+
+        # Quantization levels
+        self.a_hat = 2 ** (bits - 1) - 1  # For symmetric quantization
+
+    def forward(self, weights):
+        if not self.training:
+            return weights  # No quantization during inference
+
+        # ASQ quantization scheme from Equation (6)
+        eps = 1e-5
+
+        # Adaptive re-scaling with learnable lambda (add stability)
+        variance = torch.var(weights) + eps
+        lambda_clamped = torch.clamp(
+            self.lambda_param, 0.1, 10.0
+        )  # Prevent extreme values
+        W_tilde = weights / (lambda_clamped * torch.sqrt(variance) + eps)
+
+        # Clamping step with more conservative bounds
+        W_hat = torch.tanh(W_tilde)
+        max_val = torch.max(torch.abs(W_hat))
+        if max_val > eps:
+            W_hat = W_hat / max_val
+
+        # Symmetric quantization
+        Q = torch.round(self.a_hat * W_hat) / self.a_hat
+
+        # Apply quantization with gradual introduction during training
+        # This helps with training stability
+        alpha = (
+            min(1.0, self.training_step / 1000.0)
+            if hasattr(self, "training_step")
+            else 1.0
+        )
+        quantized = weights + alpha * (Q - weights).detach()
+
+        # Sanity check: ensure output is reasonable
+        if torch.isnan(quantized).any() or torch.isinf(quantized).any():
+            return weights  # Fallback to original weights if unstable
+
+        return quantized
+
+
+class EtinyNet(pl.LightningModule):
+    """
+    EtinyNet: Extremely Tiny Network for TinyML
+
+    Implements the architecture from "EtinyNet: Extremely Tiny Network for TinyML"
+    by Xu et al. (2022). Features ultra-lightweight CNN with Linear Depthwise Blocks (LB)
+    and Dense Linear Depthwise Blocks (DLB) for maximum parameter efficiency.
+
+    Two variants:
+    - EtinyNet-1.0: 976K parameters, 117M MAdds
+    - EtinyNet-0.75: 680K parameters, 75M MAdds
+    """
+
+    def __init__(
+        self,
+        variant="1.0",
+        num_classes=1000,
+        input_size=112,
+        use_asq=False,
+        asq_bits=4,
+        lr=0.1,
+        max_epochs=300,
+    ):
+        super().__init__()
+
+        self.variant = variant
+        self.num_classes = num_classes
+        self.input_size = input_size
+        self.use_asq = use_asq
+        self.lr = lr
+        self.max_epochs = max_epochs
+
+        # Architecture configurations from Table 1
+        if variant == "1.0":
+            self.configs = {
+                "conv_channels": 32,
+                "stage1": [(32, 32, 32), 4],  # LB: [32,32,32] × 4
+                "stage2": [
+                    (32, 128, 128),
+                    1,
+                    (128, 128, 128),
+                    3,
+                ],  # LB: [32,128,128] × 1, [128,128,128] × 3
+                "stage3": [
+                    (128, 192, 192),
+                    1,
+                    (192, 192, 192),
+                    2,
+                ],  # DLB: [128,192,192] × 1, [192,192,192] × 2
+                "stage4": [
+                    (192, 256, 256),
+                    1,
+                    (256, 256, 256),
+                    1,
+                    (256, 512, 512),
+                    1,
+                ],  # DLB
+            }
+        elif variant == "0.75":
+            self.configs = {
+                "conv_channels": 24,
+                "stage1": [(24, 24, 24), 4],  # LB: [24,24,24] × 4
+                "stage2": [
+                    (24, 96, 96),
+                    1,
+                    (96, 96, 96),
+                    3,
+                ],  # LB: [24,96,96] × 1, [96,96,96] × 3
+                "stage3": [
+                    (96, 168, 168),
+                    1,
+                    (168, 168, 168),
+                    2,
+                ],  # DLB: [96,168,168] × 1, [168,168,168] × 2
+                "stage4": [
+                    (168, 192, 192),
+                    1,
+                    (192, 192, 192),
+                    1,
+                    (192, 384, 384),
+                    1,
+                ],  # DLB
+            }
+        else:
+            raise ValueError(f"Unsupported variant: {variant}. Use '1.0' or '0.75'")
+
+        # Build the network
+        self._build_network()
+
+        # Initialize ASQ for 4-bit quantization if enabled
+        if use_asq:
+            self.asq = AdaptiveScaleQuantization(bits=asq_bits)
+
+        # Initialize weights
+        self._init_weights()
+
+    def _build_network(self):
+        """Build EtinyNet architecture following Table 1."""
+        layers = []
+
+        # Initial convolution: 3×3, stride 2
+        layers.append(
+            nn.Conv2d(
+                3,
+                self.configs["conv_channels"],
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                bias=True,
+            )
+        )
+        layers.append(nn.ReLU(inplace=True))
+
+        # Max pooling: 2×2, stride 2
+        layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
+
+        # Stage 1: 56² -> LB blocks (maximum memory consumption stage)
+        current_channels = self.configs["conv_channels"]
+        stage1_config = self.configs["stage1"]
+        in_ch, mid_ch, out_ch = stage1_config[0]
+        num_blocks = stage1_config[1]
+
+        # First block may have channel change
+        layers.append(LinearDepthwiseBlock(current_channels, mid_ch, out_ch, stride=1))
+        current_channels = out_ch
+
+        # Remaining blocks
+        for _ in range(num_blocks - 1):
+            layers.append(
+                LinearDepthwiseBlock(current_channels, mid_ch, out_ch, stride=1)
+            )
+
+        self.stage1 = nn.Sequential(*layers)
+
+        # Stage 2: 28² -> LB blocks
+        stage2_layers = []
+        stage2_config = self.configs["stage2"]
+
+        # Parse stage2 config: [(in1, mid1, out1), num1, (in2, mid2, out2), num2]
+        in_ch1, mid_ch1, out_ch1 = stage2_config[0]
+        num_blocks1 = stage2_config[1]
+        in_ch2, mid_ch2, out_ch2 = stage2_config[2]
+        num_blocks2 = stage2_config[3]
+
+        # First set of blocks with stride=2 for downsampling
+        stage2_layers.append(
+            LinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=2)
+        )
+        current_channels = out_ch1
+
+        for _ in range(num_blocks1 - 1):
+            stage2_layers.append(
+                LinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=1)
+            )
+
+        # Second set of blocks
+        stage2_layers.append(
+            LinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+        )
+        current_channels = out_ch2
+
+        for _ in range(num_blocks2 - 1):
+            stage2_layers.append(
+                LinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+            )
+
+        self.stage2 = nn.Sequential(*stage2_layers)
+
+        # Stage 3: 14² -> DLB blocks
+        stage3_layers = []
+        stage3_config = self.configs["stage3"]
+
+        in_ch1, mid_ch1, out_ch1 = stage3_config[0]
+        num_blocks1 = stage3_config[1]
+        in_ch2, mid_ch2, out_ch2 = stage3_config[2]
+        num_blocks2 = stage3_config[3]
+
+        # First set with stride=2 for downsampling
+        stage3_layers.append(
+            DenseLinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=2)
+        )
+        current_channels = out_ch1
+
+        for _ in range(num_blocks1 - 1):
+            stage3_layers.append(
+                DenseLinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=1)
+            )
+
+        # Second set
+        stage3_layers.append(
+            DenseLinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+        )
+        current_channels = out_ch2
+
+        for _ in range(num_blocks2 - 1):
+            stage3_layers.append(
+                DenseLinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+            )
+
+        self.stage3 = nn.Sequential(*stage3_layers)
+
+        # Stage 4: 7² -> DLB blocks
+        stage4_layers = []
+        stage4_config = self.configs["stage4"]
+
+        # Parse stage4: [(ch1), num1, (ch2), num2, (ch3), num3]
+        in_ch1, mid_ch1, out_ch1 = stage4_config[0]
+        num_blocks1 = stage4_config[1]
+        in_ch2, mid_ch2, out_ch2 = stage4_config[2]
+        num_blocks2 = stage4_config[3]
+        in_ch3, mid_ch3, out_ch3 = stage4_config[4]
+        num_blocks3 = stage4_config[5]
+
+        # First set with stride=2 for downsampling
+        stage4_layers.append(
+            DenseLinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=2)
+        )
+        current_channels = out_ch1
+
+        for _ in range(num_blocks1 - 1):
+            stage4_layers.append(
+                DenseLinearDepthwiseBlock(current_channels, mid_ch1, out_ch1, stride=1)
+            )
+
+        # Second set
+        stage4_layers.append(
+            DenseLinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+        )
+        current_channels = out_ch2
+
+        for _ in range(num_blocks2 - 1):
+            stage4_layers.append(
+                DenseLinearDepthwiseBlock(current_channels, mid_ch2, out_ch2, stride=1)
+            )
+
+        # Third set
+        stage4_layers.append(
+            DenseLinearDepthwiseBlock(current_channels, mid_ch3, out_ch3, stride=1)
+        )
+        current_channels = out_ch3
+
+        for _ in range(num_blocks3 - 1):
+            stage4_layers.append(
+                DenseLinearDepthwiseBlock(current_channels, mid_ch3, out_ch3, stride=1)
+            )
+
+        self.stage4 = nn.Sequential(*stage4_layers)
+
+        # Global average pooling + FC-1000
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Linear(current_channels, self.num_classes)
+
+        # Store final feature dimensions for parameter counting
+        self.final_channels = current_channels
+
+    def _init_weights(self):
+        """Initialize weights following paper specifications."""
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        """Forward pass through EtinyNet."""
+        # Apply ASQ quantization during training if enabled
+        if self.training and self.use_asq:
+            # Apply ASQ to conv weights
+            for module in self.modules():
+                if isinstance(module, nn.Conv2d):
+                    module.weight.data = self.asq(module.weight.data)
+
+        # Forward through stages
+        x = self.stage1(x)  # 56² -> after conv+pool+LB
+        x = self.stage2(x)  # 28² -> after LB
+        x = self.stage3(x)  # 14² -> after DLB
+        x = self.stage4(x)  # 7² -> after DLB
+
+        # Global pooling and classification
+        x = self.global_pool(x)  # -> 1×1
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+
+        return x
+
+    def training_step(self, batch, batch_idx):
+        """Training step for PyTorch Lightning."""
+        images, targets = batch
+        outputs = self(images)
+        loss = nn.functional.cross_entropy(outputs, targets)
+
+        # Log metrics
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step for PyTorch Lightning."""
+        images, targets = batch
+        outputs = self(images)
+        loss = nn.functional.cross_entropy(outputs, targets)
+
+        # Calculate accuracy
+        _, predicted = torch.max(outputs.data, 1)
+        accuracy = (predicted == targets).sum().item() / targets.size(0)
+
+        # Log metrics
+        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_acc", accuracy, prog_bar=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        """Test step for PyTorch Lightning."""
+        return self.validation_step(batch, batch_idx)
+
+    def configure_optimizers(self):
+        """Configure optimizers and schedulers."""
+        optimizer = torch.optim.SGD(
+            self.parameters(), lr=self.lr, momentum=0.9, weight_decay=1e-4
+        )
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=self.max_epochs, eta_min=0
+        )
+
+        return [optimizer], [scheduler]
+
+    def count_parameters(self):
+        """Count total parameters in the model."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def count_flops(self, input_size=None):
+        """Estimate FLOPs (multiply-adds) for the model."""
+        if input_size is None:
+            input_size = self.input_size
+
+        # This is a rough estimation - for exact FLOP counting,
+        # use specialized tools like fvcore or ptflops
+        total_flops = 0
+
+        # Initial conv: H*W*3*32*3*3
+        h, w = input_size // 2, input_size // 2  # After stride=2
+        total_flops += h * w * 3 * self.configs["conv_channels"] * 9
+
+        # Max pool doesn't add FLOPs
+        h, w = h // 2, w // 2  # After max pool
+
+        # Estimate for each stage (simplified)
+        # This is a rough approximation - exact counting would need
+        # to trace through each layer
+        if self.variant == "1.0":
+            estimated_flops = 117_000_000  # From paper
+        else:  # 0.75
+            estimated_flops = 75_000_000  # From paper
+
+        return estimated_flops
 
 
 class FeatureTransformer(nn.Module):
