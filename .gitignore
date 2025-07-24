@@ -19,3 +19,17 @@ example_benchmark_results/
 
 
 .DS_Store
+
+# Build directories
+build/
+engine/build/
+engine/build/build_bench
+
+# C++ compiled binaries and artifacts
+*.exe
+*.out
+*.so
+*.dylib
+*.dll
+*.a
+*.lib

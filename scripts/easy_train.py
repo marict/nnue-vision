@@ -318,13 +318,8 @@ def terminate_process_on_exit(process):
     Create a watchdog process that awaits the termination of this (calling) process
     and automatically terminates a given process (python's subprocess object) after.
 
-    On Windows this is achieved by a wmic call that is deprecated in windows 10,
-    and may not work in windows 11.
-        See: https://stackoverflow.com/a/22559493/3763139
-             https://superuser.com/a/1299350/388191
-
-    TODO: powershell version
-    TODO: linux version
+    Note: This is not used by the main training pipeline (train.py, train_etinynet.py)
+    and only affects the legacy easy_train.py script.
     """
 
     if sys.platform == "win32":

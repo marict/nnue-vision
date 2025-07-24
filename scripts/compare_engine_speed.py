@@ -54,7 +54,9 @@ def ensure_engine_built(build_dir: Path) -> None:
 
     # Configure step (run only if cache is absent)
     if not (build_dir / "CMakeCache.txt").exists():
-        run(["cmake", "-DCMAKE_BUILD_TYPE=Release", ".."], cwd=build_dir)
+        # Point to the engine directory which contains CMakeLists.txt
+        engine_src_dir = build_dir.parent.parent  # engine/build/build_bench -> engine
+        run(["cmake", "-DCMAKE_BUILD_TYPE=Release", str(engine_src_dir)], cwd=build_dir)
 
     # Build static library and NNUE benchmark executable
     run(
@@ -153,7 +155,7 @@ def parse_etiny_benchmark(output: str) -> float:
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     engine_dir = repo_root / "engine"
-    build_dir = engine_dir / "build_bench"
+    build_dir = engine_dir / "build" / "build_bench"
 
     # Step 1: Build engine & benchmarks
     print("🔧 Building C++ engine & benchmarks (Release mode)…")
