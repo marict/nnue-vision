@@ -33,25 +33,73 @@ std::vector<int> generate_sparse_features(int total_features, double sparsity_ra
     return active_features;
 }
 
-BenchmarkResult benchmark_scenario(NNUEEvaluator& evaluator, const std::string& scenario_name,
-                                  const std::vector<int>& active_features, int iterations = 1000) {
+std::vector<int> generate_varied_features(const std::vector<int>& base_features, 
+                                         int total_features, double sparsity_ratio, 
+                                         double overlap_ratio, std::mt19937& rng) {
+    int target_num_features = std::max(1, static_cast<int>(total_features * sparsity_ratio));
+    int keep_count = static_cast<int>(base_features.size() * overlap_ratio);
+    
+    std::vector<int> result;
+    result.reserve(target_num_features);
+    
+    // Keep some features from base set
+    std::vector<int> base_copy = base_features;
+    std::shuffle(base_copy.begin(), base_copy.end(), rng);
+    for (int i = 0; i < keep_count && i < static_cast<int>(base_copy.size()); ++i) {
+        result.push_back(base_copy[i]);
+    }
+    
+    // Add new random features
+    std::vector<int> all_features(total_features);
+    std::iota(all_features.begin(), all_features.end(), 0);
+    std::shuffle(all_features.begin(), all_features.end(), rng);
+    
+    for (int feature : all_features) {
+        if (std::find(result.begin(), result.end(), feature) == result.end()) {
+            result.push_back(feature);
+            if (static_cast<int>(result.size()) >= target_num_features) break;
+        }
+    }
+    
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+BenchmarkResult benchmark_scenario_with_variation(NNUEEvaluator& evaluator, const std::string& scenario_name,
+                                                 double sparsity_ratio, int iterations = 1000) {
     std::vector<double> times;
     times.reserve(iterations);
     
-    // Warmup
+    std::mt19937 rng(42); // Fixed seed for reproducibility
+    
+    // Generate initial feature set
+    std::vector<int> current_features = generate_sparse_features(
+        evaluator.get_num_features(), sparsity_ratio, rng);
+    
+    // Warmup with varying features
     for (int i = 0; i < 10; ++i) {
-        evaluator.evaluate_incremental(active_features, 0);
+        // Generate slightly different feature set for each warmup
+        std::vector<int> warmup_features = generate_sparse_features(
+            evaluator.get_num_features(), sparsity_ratio, rng);
+        evaluator.evaluate_incremental(warmup_features, 0);
     }
     
-    // Benchmark
+    // Benchmark with fluctuating features to trigger incremental updates
     for (int i = 0; i < iterations; ++i) {
+        // Generate new feature set with some overlap to simulate realistic position changes
+        std::vector<int> new_features = generate_varied_features(
+            current_features, evaluator.get_num_features(), sparsity_ratio, 0.8, rng);
+        
         auto start = high_resolution_clock::now();
         
-        evaluator.evaluate_incremental(active_features, 0);
+        evaluator.evaluate_incremental(new_features, 0);
         
         auto end = high_resolution_clock::now();
         auto duration = duration_cast<nanoseconds>(end - start);
         times.push_back(duration.count() / 1000000.0); // Convert to milliseconds
+        
+        // Update current features for next iteration
+        current_features = new_features;
     }
     
     // Calculate statistics
@@ -67,11 +115,11 @@ BenchmarkResult benchmark_scenario(NNUEEvaluator& evaluator, const std::string& 
     
     return {
         scenario_name,
-        static_cast<int>(active_features.size()),
+        static_cast<int>(current_features.size()),
         sum / times.size(),
         min_time,
         max_time,
-        active_features
+        current_features
     };
 }
 
@@ -140,7 +188,7 @@ int main(int argc, char* argv[]) {
         evaluator.mark_dirty();
         
         // Benchmark this scenario
-        BenchmarkResult result = benchmark_scenario(evaluator, scenario.name, active_features, 1000);
+        BenchmarkResult result = benchmark_scenario_with_variation(evaluator, scenario.name, scenario.sparsity_ratio, 1000);
         results.push_back(result);
         
         std::cout << std::left << std::setw(20) << result.scenario
@@ -229,12 +277,23 @@ int main(int argc, char* argv[]) {
     auto dense_result = results.back(); // Dense scenario
     double chess_speedup = dense_result.avg_time_ms / chess_result.avg_time_ms;
     
-    std::cout << "✅ SIMD Optimizations: Active (AVX2/NEON)\n";
-    std::cout << "✅ Incremental Updates: " << std::fixed << std::setprecision(1) << incremental_speedup << "x faster\n";
-    std::cout << "✅ Sparsity Benefits: " << std::fixed << std::setprecision(0) << chess_speedup << "x speedup (Chess-like vs Dense)\n";
-    std::cout << "✅ Best Performance: " << std::fixed << std::setprecision(4) << chess_result.avg_time_ms 
-              << "ms (" << chess_result.num_features << " active features)\n";
-    std::cout << "✅ Architecture: C++ integer math with memory-resident accumulators\n";
+    std::cout << "Best case (chess-like): " << std::fixed << std::setprecision(4) << chess_result.avg_time_ms << " ms\n";
+    std::cout << "Worst case (dense):     " << std::fixed << std::setprecision(4) << dense_result.avg_time_ms << " ms\n";
+    std::cout << "Sparsity advantage:     " << std::fixed << std::setprecision(1) << chess_speedup << "x\n";
+    
+    // Output parseable results for Python script
+    std::cout << "\n📊 DENSITY_RESULTS:\n";
+    for (const auto& result : results) {
+        std::cout << "DENSITY_RESULT:" << result.scenario << ":" << std::fixed << std::setprecision(4) << result.avg_time_ms << "\n";
+    }
+    
+    // Overall average for fallback parsing
+    double overall_avg = 0.0;
+    for (const auto& result : results) {
+        overall_avg += result.avg_time_ms;
+    }
+    overall_avg /= results.size();
+    std::cout << "RESULT_AVG_MS: " << std::fixed << std::setprecision(4) << overall_avg << "\n";
     
     return 0;
 } 
