@@ -17,9 +17,6 @@ import wandb
 
 # DEFAULT_GPU_TYPE = "NVIDIA RTX 6000 Ada Generation"  # Available in WA network volume
 DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
-# Repository to clone inside the RunPod container
-# NOTE: This should point at the public or SSH URL of your fork.
-# Public HTTPS URL avoids SSH key issues inside ephemeral containers
 REPO_URL = "https://github.com/marict/nnue-vision.git"
 
 
