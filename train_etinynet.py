@@ -112,6 +112,18 @@ def main():
         default=None,
         help="Wandb API key (or set WANDB_API_KEY env var)",
     )
+    parser.add_argument(
+        "--wandb-run-id",
+        type=str,
+        default=None,
+        help="Resume specific W&B run",
+    )
+    parser.add_argument(
+        "--log_dir",
+        type=str,
+        default="logs",
+        help="Directory for logs and checkpoints",
+    )
 
     args = parser.parse_args()
 
@@ -184,7 +196,7 @@ def main():
     )
 
     # Set up logging
-    log_dir = getattr(config, "log_dir", "logs")
+    log_dir = args.log_dir or getattr(config, "log_dir", "logs")
     loggers = []
     callbacks = []
 
@@ -196,11 +208,19 @@ def main():
     # Wandb logger (always required)
     early_log("🔗 Setting up Wandb logging...")
     project_name = getattr(config, "project_name", f"etinynet_{dataset_name}")
-    wandb_logger = WandbLogger(
-        project=project_name,
-        name=run_name,
-        save_dir=log_dir,
-    )
+
+    # Handle W&B run resumption if run ID is provided
+    wandb_kwargs = {
+        "project": project_name,
+        "name": run_name,
+        "save_dir": log_dir,
+    }
+    if getattr(args, "wandb_run_id", None):
+        early_log(f"🔄 Resuming W&B run: {args.wandb_run_id}")
+        wandb_kwargs["id"] = args.wandb_run_id
+        wandb_kwargs["resume"] = "must"
+
+    wandb_logger = WandbLogger(**wandb_kwargs)
     loggers = [wandb_logger]
 
     # Log configuration to wandb

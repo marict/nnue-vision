@@ -232,7 +232,7 @@ def log_sample_predictions(model, val_loader, device, num_samples=8):
     wandb.log({"validation/sample_predictions": wandb_images})
 
 
-def setup_wandb_logger(config) -> WandbLogger:
+def setup_wandb_logger(config, wandb_run_id: str | None = None) -> WandbLogger:
     """Set up wandb logger with comprehensive configuration."""
 
     # Generate run name with timestamp and key parameters
@@ -269,14 +269,22 @@ def setup_wandb_logger(config) -> WandbLogger:
     if hasattr(config, "note") and config.note:
         wandb_config["experiment/note"] = config.note
 
+    # Handle W&B run resumption if run ID is provided
+    wandb_kwargs = {
+        "project": config.project_name,
+        "name": run_name,
+        "config": wandb_config,
+        "save_dir": config.log_dir,
+        "log_model": True,  # Save model checkpoints to wandb
+    }
+
+    if wandb_run_id:
+        early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
+        wandb_kwargs["id"] = wandb_run_id
+        wandb_kwargs["resume"] = "must"
+
     # Initialize wandb logger
-    wandb_logger = WandbLogger(
-        project=config.project_name,
-        name=run_name,
-        config=wandb_config,
-        save_dir=config.log_dir,
-        log_model=True,  # Save model checkpoints to wandb
-    )
+    wandb_logger = WandbLogger(**wandb_kwargs)
 
     return wandb_logger
 
@@ -419,6 +427,18 @@ def main():
         default=None,
         help="Wandb API key (or set WANDB_API_KEY env var)",
     )
+    parser.add_argument(
+        "--wandb-run-id",
+        type=str,
+        default=None,
+        help="Resume specific W&B run",
+    )
+    parser.add_argument(
+        "--log_dir",
+        type=str,
+        default="logs",
+        help="Directory for logs and checkpoints",
+    )
 
     args = parser.parse_args()
 
@@ -482,11 +502,14 @@ def main():
     )
 
     # Set up logging
-    log_dir = getattr(config, "log_dir", "logs")
+    log_dir = args.log_dir or getattr(config, "log_dir", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
+    # Update config with log_dir for consistency
+    config.log_dir = log_dir
+
     # Setup wandb logger (always required)
-    wandb_logger = setup_wandb_logger(config)
+    wandb_logger = setup_wandb_logger(config, wandb_run_id=args.wandb_run_id)
     loggers = [wandb_logger]
 
     # Log git information to wandb for experiment tracking
