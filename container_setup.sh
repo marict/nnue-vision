@@ -67,8 +67,8 @@ apt-get install -y --no-install-recommends tree htop || true
 log "installing python deps"
 pip install -q -r requirements.txt
 
-# Install additional RunPod/W&B dependencies
-pip install -q wandb runpod
+# Install additional RunPod dependencies
+pip install -q -r requirements-runpod.txt
 
 #---------------------------------------------------------------------------#
 # debugging env vars
