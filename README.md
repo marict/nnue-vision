@@ -21,13 +21,13 @@ This project implements NNUE (Neural Network Efficiently Updatable) architecture
 pip install -r requirements.txt
 
 # Train NNUE model on CIFAR-10
-python train_nnue.py --config config/train_nnue_default.py
+python train.py nnue --config config/train_nnue_default.py
 
 # Train EtinyNet model on CIFAR-10  
-python train_etinynet.py --config config/train_etinynet_default.py
+python train.py etinynet --config config/train_etinynet_default.py
 
 # Override specific parameters
-python train_nnue.py --config config/train_nnue_default.py --max_epochs 50 --batch_size 64
+python train.py nnue --config config/train_nnue_default.py --max_epochs 50 --batch_size 64
 ```
 
 ### Cloud Training (RunPod)
@@ -41,10 +41,10 @@ export WANDB_API_KEY=your_wandb_key
 export RUNPOD_API_KEY=your_runpod_key
 
 # Start NNUE cloud training
-python runpod_service.py train --script train_nnue.py --config config/train_nnue_default.py
+python runpod_service.py train --script train.py --config config/train_nnue_default.py --model nnue
 
 # Start EtinyNet cloud training
-python runpod_service.py train --script train_etinynet.py --config config/train_etinynet_default.py
+python runpod_service.py train --script train.py --config config/train_etinynet_default.py --model etinynet
 ```
 
 ## Model Architectures
@@ -122,14 +122,6 @@ python scripts/run_mcu_benchmarks.py --model checkpoints/model.pt --dataset cifa
 
 # Run example benchmark
 python run_example_benchmark.py
-```
-
-### Docker
-```bash
-# Build and run container
-./run_docker.sh
-
-# Select NVIDIA or AMD GPU support when prompted
 ```
 
 ## C++ Engine Integration

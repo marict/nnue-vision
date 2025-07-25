@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-import train_etinynet
+import train
 
 
 class DummyWandbLogger:
@@ -74,23 +74,27 @@ log_dir = r'{}'
     monkeypatch.setenv("WANDB_API_KEY", "dummy")
     monkeypatch.setenv("WANDB_MODE", "disabled")  # prevent network use
 
-    # Replace WandbLogger with dummy implementation
-    monkeypatch.setattr(train_etinynet, "WandbLogger", DummyWandbLogger)
+    # Replace WandbLogger with dummy implementation in training_framework
+    import training_framework
 
-    # Stub out wandb module used inside train_etinynet
+    monkeypatch.setattr(training_framework, "WandbLogger", DummyWandbLogger)
+
+    # Stub out wandb module used inside training_framework
     monkeypatch.setattr(
-        train_etinynet,
+        training_framework,
         "wandb",
         SimpleNamespace(
             init=lambda *_, **__: SimpleNamespace(url="local", id="id"),
             log=lambda *_1, **_2: None,
             finish=lambda *_a, **_kw: None,
+            Artifact=lambda *_, **__: SimpleNamespace(add_file=lambda x: None),
+            log_artifact=lambda x: None,
         ),
     )
 
     # Patch replay_early_logs_to_wandb to no-op (signature mismatch in script)
     monkeypatch.setattr(
-        train_etinynet, "replay_early_logs_to_wandb", lambda *_a, **_kw: None
+        training_framework, "replay_early_logs_to_wandb", lambda *_a, **_kw: None
     )
 
     # Provide tiny synthetic data loaders to avoid dataset download
@@ -101,7 +105,7 @@ log_dir = r'{}'
         _PLTrainer, "test", lambda self, *a, **kw: [{"test_loss": 0.0, "test_acc": 0.0}]
     )
 
-    with patch("train_etinynet.create_data_loaders") as mock_loaders:
+    with patch("etinynet_adapter.create_data_loaders") as mock_loaders:
         dummy_ds = torch.utils.data.TensorDataset(
             torch.randn(4, 3, 32, 32), torch.randint(0, 10, (4,))
         )
@@ -109,10 +113,11 @@ log_dir = r'{}'
         mock_loaders.return_value = (dummy_loader, dummy_loader, dummy_loader)
 
         # -----------------------------------------------------------------
-        # 3. Invoke train_etinynet.main() with CLI-style argv
+        # 3. Invoke unified train.py with etinynet model type
         # -----------------------------------------------------------------
         argv = [
-            "train_etinynet.py",
+            "train.py",
+            "etinynet",
             "--config",
             str(cfg_path),
             "--variant",
@@ -123,5 +128,9 @@ log_dir = r'{}'
             "2",
         ]
         with patch.object(sys, "argv", argv):
-            # The function prints but should not raise exceptions
-            train_etinynet.main()
+            # The function prints but should not raise exceptions (sys.exit(0) is expected)
+            with pytest.raises(SystemExit) as exc_info:
+                train.main()
+            assert (
+                exc_info.value.code == 0
+            ), f"Expected successful exit, got: {exc_info.value.code}"

@@ -14,7 +14,7 @@ import torch
 from matplotlib.widgets import Button, Slider
 from PIL import Image
 
-from . import create_data_loaders, get_dataset_stats, print_dataset_stats
+from . import create_data_loaders, print_dataset_stats
 from .datasets import VWW_CLASS_NAMES
 from .loaders import calculate_dataset_statistics, print_loader_statistics
 

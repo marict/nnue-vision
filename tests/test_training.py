@@ -20,11 +20,12 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
-import train_etinynet
-import train_nnue
+import train
 from config import ConfigError, load_config
 from data import create_data_loaders
+from etinynet_adapter import EtinyNetAdapter
 from model import NNUE, EtinyNet, GridFeatureSet, LossParams
+from nnue_adapter import NNUEWrapper, adapt_batch_for_nnue
 from serialize import serialize_etinynet_model, serialize_model
 
 
@@ -151,7 +152,7 @@ class TestDataLoaderIntegration:
 
         # Test batch format adaptation
         batch = next(iter(train_loader))
-        adapted_batch = train_nnue.adapt_batch_for_nnue(batch, num_ls_buckets=2)
+        adapted_batch = adapt_batch_for_nnue(batch, num_ls_buckets=2)
 
         assert len(adapted_batch) == 4  # images, targets, scores, layer_stack_indices
         images, targets, scores, layer_stack_indices = adapted_batch
@@ -197,7 +198,7 @@ class TestTrainingScriptFunctionality:
             visual_threshold=0.5,
         )
 
-        wrapper = train_nnue.NNUEWrapper(nnue_model)
+        wrapper = NNUEWrapper(nnue_model)
         assert wrapper.num_ls_buckets == 2
 
         # Test training step with standard batch format
@@ -244,7 +245,7 @@ class TestTrainingIntegration:
     @pytest.mark.timeout(60)  # Prevent hanging tests
     def test_nnue_minimal_training_run(self, tmp_path):
         """Test minimal NNUE training run with mocked data."""
-        with patch("train_nnue.create_data_loaders") as mock_loaders:
+        with patch("nnue_adapter.create_data_loaders") as mock_loaders:
             # Mock tiny data loaders
             mock_dataset = torch.utils.data.TensorDataset(
                 torch.randn(8, 3, 96, 96), torch.randint(0, 2, (8,))
@@ -264,7 +265,7 @@ class TestTrainingIntegration:
                 lr=1e-3,
             )
 
-            wrapper = train_nnue.NNUEWrapper(nnue_model)
+            wrapper = NNUEWrapper(nnue_model)
 
             # Create minimal trainer
             trainer = pl.Trainer(
@@ -288,7 +289,7 @@ class TestTrainingIntegration:
     @pytest.mark.timeout(60)  # Prevent hanging tests
     def test_etinynet_minimal_training_run(self, tmp_path):
         """Test minimal EtinyNet training run with mocked data."""
-        with patch("train_etinynet.create_data_loaders") as mock_loaders:
+        with patch("etinynet_adapter.create_data_loaders") as mock_loaders:
             # Mock tiny CIFAR-10 style data loaders
             mock_dataset = torch.utils.data.TensorDataset(
                 torch.randn(8, 3, 32, 32), torch.randint(0, 10, (8,))
@@ -369,13 +370,16 @@ class TestTrainingScriptImports:
 
     def test_train_imports(self):
         """Test that main NNUE training script imports without errors."""
-        assert hasattr(train_nnue, "main")
-        assert hasattr(train_nnue, "NNUEWrapper")
-        assert hasattr(train_nnue, "adapt_batch_for_nnue")
+        assert hasattr(train, "main")
+        # Test adapter functionality is available through the new modules
+        from nnue_adapter import NNUEWrapper, adapt_batch_for_nnue
+
+        assert NNUEWrapper is not None
+        assert adapt_batch_for_nnue is not None
 
     def test_train_etinynet_imports(self):
         """Test that EtinyNet training script imports without errors."""
-        assert hasattr(train_etinynet, "main")
+        assert hasattr(train, "main")
 
 
 class TestConfigurationValidation:

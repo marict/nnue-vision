@@ -71,7 +71,7 @@ class TestDockerScriptGeneration:
 
     def test_create_docker_script_basic(self):
         """Test basic docker script creation."""
-        training_command = "train_nnue.py --config config/train_nnue_default.py"
+        training_command = "train.py nnue --config config/train_nnue_default.py"
         result = _create_docker_script(training_command)
 
         assert isinstance(result, str)
@@ -83,7 +83,7 @@ class TestDockerScriptGeneration:
     def test_create_docker_script_with_special_chars(self):
         """Test docker script with training commands containing special characters."""
         training_command = (
-            "train_nnue.py --note=\"test run with 'quotes'\" --batch_size=32"
+            "train.py nnue --note=\"test run with 'quotes'\" --batch_size=32"
         )
         result = _create_docker_script(training_command)
 
@@ -92,7 +92,7 @@ class TestDockerScriptGeneration:
 
     def test_docker_script_graphql_safe(self):
         """Test that docker scripts are safe for GraphQL embedding."""
-        training_command = "train_nnue.py --note=\"complex 'test' with $special chars\""
+        training_command = "train.py nnue --note=\"complex 'test' with $special chars\""
         docker_script = _create_docker_script(training_command)
         final_docker_args = _bash_c_quote(docker_script)
 
@@ -129,7 +129,7 @@ class TestGraphQLMutationSafety:
 
     def test_simple_mutation_parsing(self, graphql_schema):
         """Test that simple docker args parse correctly in GraphQL."""
-        training_command = "train_nnue.py --config config/train_nnue_default.py"
+        training_command = "train.py nnue --config config/train_nnue_default.py"
         docker_script = _create_docker_script(training_command)
         escaped_args = _bash_c_quote(docker_script)
 
@@ -149,7 +149,7 @@ class TestGraphQLMutationSafety:
 
     def test_complex_mutation_parsing(self, graphql_schema):
         """Test complex docker args with special characters in GraphQL."""
-        training_command = """train_nnue.py --note="test with 'quotes' and \\"double quotes\\"" --config=config/train_nnue_default.py"""
+        training_command = """train.py nnue --note="test with 'quotes' and \\"double quotes\\"" --config=config/train_nnue_default.py"""
         docker_script = _create_docker_script(training_command)
         escaped_args = _bash_c_quote(docker_script)
 
@@ -170,7 +170,7 @@ class TestGraphQLMutationSafety:
     def test_mutation_with_newlines(self, graphql_schema):
         """Test docker args containing newlines are properly escaped."""
         # Create a docker script that inherently contains newlines
-        training_command = "train_nnue.py --config config/train_nnue_default.py"
+        training_command = "train.py nnue --config config/train_nnue_default.py"
         docker_script = _create_docker_script(training_command)
 
         # Add some newlines to simulate complex bash commands
@@ -202,7 +202,7 @@ class TestRegressionCases:
 
     def test_single_quote_regression(self):
         """Test that single quotes don't cause 'Unexpected single quote' errors."""
-        training_command = "train_nnue.py --note='single quoted note'"
+        training_command = "train.py nnue --note='single quoted note'"
         docker_script = _create_docker_script(training_command)
         escaped_args = _bash_c_quote(docker_script)
 
@@ -222,7 +222,7 @@ class TestRegressionCases:
 
     def test_number_format_regression(self):
         """Test that numeric arguments don't cause 'Invalid number' errors."""
-        training_command = "train_nnue.py --batch_size=32 --learning_rate=1e-4"
+        training_command = "train.py nnue --batch_size=32 --learning_rate=1e-4"
         docker_script = _create_docker_script(training_command)
         escaped_args = _bash_c_quote(docker_script)
 
@@ -243,7 +243,7 @@ class TestRegressionCases:
     @pytest.mark.parametrize("problematic_char", ['"', "'", "\\", "\n", "\t", "$", "`"])
     def test_various_problematic_characters(self, problematic_char):
         """Test various characters that could break GraphQL syntax."""
-        training_command = f"train_nnue.py --note=test{problematic_char}value"
+        training_command = f"train.py nnue --note=test{problematic_char}value"
         docker_script = _create_docker_script(training_command)
         escaped_args = _bash_c_quote(docker_script)
 

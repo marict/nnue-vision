@@ -17,7 +17,7 @@ import wandb
 # - NVIDIA L40, L40S, RTX 6000 Ada Generation, RTX A6000
 # - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
 
-# DEFAULT_GPU_TYPE = "NVIDIA RTX 6000 Ada Generation"  # Available in WA network volume
+
 DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
 REPO_URL = "https://github.com/marict/nnue-vision.git"
 
@@ -50,26 +50,26 @@ NNUE Training (Neural Network Efficiently Updatable):
 For chess/game engine evaluation networks:
 
     # Basic NNUE training with default config
-    python runpod_service.py train --script train_nnue.py --config config/train_nnue_default.py
+    python runpod_service.py train --script train.py nnue --config config/train_nnue_default.py
 
     # NNUE with custom parameters
-    python runpod_service.py train --script train_nnue.py --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
+    python runpod_service.py train --script train.py nnue --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
 
     # Quick test run
-    python runpod_service.py train --script train_nnue.py --config config/train_test.py
+    python runpod_service.py train --script train.py nnue --config config/train_test.py
 
 EtinyNet Training (Efficient Tiny Networks):
 --------------------------------------------
 For standard computer vision tasks (CIFAR-10/100):
 
     # Basic EtinyNet training
-    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py
+    python runpod_service.py train --script train.py etinynet --config config/train_etinynet.py
 
     # EtinyNet with custom parameters
-    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py --max_epochs 200 --batch_size 64
+    python runpod_service.py train --script train.py etinynet --config config/train_etinynet.py --max_epochs 200 --batch_size 64
 
     # Quick test run
-    python runpod_service.py train --script train_etinynet.py --config config/train_test.py
+    python runpod_service.py train --script train.py etinynet --config config/train_test.py
 
 Common Options:
 --------------
@@ -80,11 +80,11 @@ Common Options:
 Example Commands:
 ----------------
     # NNUE training with specific GPU and note
-    python runpod_service.py train --script train_nnue.py --config config/train_nnue_default.py \\
+    python runpod_service.py train --script train.py nnue --config config/train_nnue_default.py \\
         --gpu-type "NVIDIA A100 80GB PCIe" --note "baseline NNUE experiment"
 
     # EtinyNet training with custom settings
-    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py \\
+    python runpod_service.py train --script train.py etinynet --config config/train_etinynet.py \\
         --max_epochs 200 --learning_rate 0.05 --note "reduced LR experiment"
 
 Notes:
@@ -147,7 +147,7 @@ def _build_training_command(
     keep_alive: bool,
     note: str | None,
     wandb_run_id: str | None,
-    script_name: str = "train_nnue.py",
+    script_name: str = "train.py",
 ) -> str:
     """Build the complete training command with all flags."""
     cmd = f"{script_name} {train_args}"
@@ -204,7 +204,7 @@ def start_cloud_training(
     api_key: str | None = None,
     keep_alive: bool = False,
     note: str | None = None,
-    script_name: str = "train_nnue.py",
+    script_name: str = "train.py",
 ) -> str:
     """Launch a RunPod GPU instance and run NNUE-Vision training automatically."""
 
@@ -405,10 +405,10 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # NNUE training
-  python runpod_service.py train --script train_nnue.py --config config/train_nnue_default.py
+  python runpod_service.py train --script train.py nnue --config config/train_nnue_default.py
 
   # EtinyNet training  
-  python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py
+  python runpod_service.py train --script train.py etinynet --config config/train_etinynet.py
 
   # Show detailed help
   python runpod_service.py help
@@ -437,27 +437,14 @@ For complete usage guide, run: python runpod_service.py help
     t.add_argument("--note", help="Note to add to the W&B run")
     t.add_argument(
         "--script",
-        default="train_nnue.py",
-        help="Training script to run (train_nnue.py for NNUE, train_etinynet.py for EtinyNet)",
+        default="train.py",
+        help="Training script to run (defaults to unified train.py)",
     )
 
     args = parser.parse_args()
     if args.cmd == "help":
         print_training_help()
     elif args.cmd == "train":
-        # Check if user mistakenly passed a training script as positional argument
-        if args.train_args and len(args.train_args) > 0:
-            first_arg = args.train_args[0]
-            if first_arg in ["train_nnue.py", "train_etinynet.py"]:
-                print(
-                    f"\nERROR: It looks like you're trying to run '{first_arg}' but passed it as a positional argument."
-                )
-                print(f"Please use the --script flag instead:\n")
-                print(
-                    f"  python runpod_service.py train --script {first_arg} {' '.join(args.train_args[1:])}"
-                )
-                print("\nFor more help, run: python runpod_service.py help")
-                sys.exit(1)
 
         train_args_str = " ".join(args.train_args) if args.train_args else ""
         start_cloud_training(

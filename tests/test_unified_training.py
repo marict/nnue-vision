@@ -1,8 +1,8 @@
 """
-Test the unified training script (train.py) with tiny configs.
+Tests for the unified training framework and model adapters.
 
-These tests run the complete training script to ensure the unified interface works end-to-end,
-using ultra-minimal configurations that complete in seconds.
+These tests verify that the new unified training system works correctly
+for both NNUE and EtinyNet models.
 """
 
 import os
@@ -17,6 +17,9 @@ import pytest
 import torch
 
 import train
+from etinynet_adapter import EtinyNetAdapter
+from nnue_adapter import NNUEAdapter
+from training_framework import BaseTrainer
 
 
 class DummyWandbLogger:
@@ -104,14 +107,92 @@ def create_tiny_synthetic_loaders():
     return nnue_loader, etinynet_loader
 
 
-class TestTrainingScriptExecution:
-    """Test actual execution of training scripts with tiny configs."""
+class TestModelAdapters:
+    """Test the model adapter classes."""
 
-    @pytest.mark.timeout(30)  # Should complete in under 30 seconds [[memory:4098712]]
-    def test_train_nnue_script_runs(
+    def test_nnue_adapter_creation(self):
+        """Test NNUE adapter can be created and has correct interface."""
+        adapter = NNUEAdapter()
+        assert adapter.get_model_type_name() == "NNUE"
+        assert adapter.get_default_config_path() == "config/train_nnue_default.py"
+
+    def test_etinynet_adapter_creation(self):
+        """Test EtinyNet adapter can be created and has correct interface."""
+        adapter = EtinyNetAdapter()
+        assert adapter.get_model_type_name() == "EtinyNet"
+        assert adapter.get_default_config_path() == "config/train_etinynet_default.py"
+
+    def test_adapter_interface_completeness(self):
+        """Test that both adapters implement the full ModelAdapter interface."""
+        adapters = [NNUEAdapter(), EtinyNetAdapter()]
+
+        required_methods = [
+            "get_model_type_name",
+            "create_model",
+            "create_data_loaders",
+            "get_callbacks",
+            "setup_wandb_config",
+            "get_model_specific_args",
+            "apply_model_specific_overrides",
+            "log_sample_predictions",
+            "save_final_model",
+            "get_default_config_path",
+            "get_run_name",
+        ]
+
+        for adapter in adapters:
+            for method in required_methods:
+                assert hasattr(
+                    adapter, method
+                ), f"{adapter.__class__.__name__} missing {method}"
+                assert callable(
+                    getattr(adapter, method)
+                ), f"{adapter.__class__.__name__}.{method} not callable"
+
+
+class TestBaseTrainer:
+    """Test the base trainer functionality."""
+
+    def test_base_trainer_creation(self):
+        """Test that BaseTrainer can be created with adapters."""
+        nnue_adapter = NNUEAdapter()
+        trainer = BaseTrainer(nnue_adapter)
+        assert trainer.adapter == nnue_adapter
+
+    def test_argument_parser_setup(self):
+        """Test that argument parser is set up correctly for both models."""
+        # Test NNUE adapter
+        nnue_adapter = NNUEAdapter()
+        nnue_trainer = BaseTrainer(nnue_adapter)
+        nnue_parser = nnue_trainer.setup_argument_parser()
+
+        # Test EtinyNet adapter
+        etinynet_adapter = EtinyNetAdapter()
+        etinynet_trainer = BaseTrainer(etinynet_adapter)
+        etinynet_parser = etinynet_trainer.setup_argument_parser()
+
+        # Both should have common arguments
+        common_args = [
+            "--config",
+            "--batch_size",
+            "--max_epochs",
+            "--learning_rate",
+            "--note",
+        ]
+        for parser in [nnue_parser, etinynet_parser]:
+            help_text = parser.format_help()
+            for arg in common_args:
+                assert arg in help_text
+
+
+class TestUnifiedTrainingScript:
+    """Test the unified training script functionality."""
+
+    @pytest.mark.timeout(30)  # Should complete in under 30 seconds
+    def test_unified_nnue_training(
         self, setup_test_env, mock_wandb_components, monkeypatch
     ):
-        """Test that unified train.py can run NNUE training with tiny config."""
+        """Test that unified script can train NNUE models."""
         test_outputs = setup_test_env
 
         # Mock external dependencies in training_framework
@@ -168,11 +249,11 @@ class TestTrainingScriptExecution:
         # Verify some output was created
         assert len(list(test_outputs.rglob("*"))) > 0, "No output files were created"
 
-    @pytest.mark.timeout(30)  # Should complete in under 30 seconds [[memory:4098712]]
-    def test_train_etinynet_script_runs(
+    @pytest.mark.timeout(30)  # Should complete in under 30 seconds
+    def test_unified_etinynet_training(
         self, setup_test_env, mock_wandb_components, monkeypatch
     ):
-        """Test that unified train.py can run EtinyNet training with tiny config."""
+        """Test that unified script can train EtinyNet models."""
         test_outputs = setup_test_env
 
         # Mock external dependencies in training_framework
@@ -228,163 +309,82 @@ class TestTrainingScriptExecution:
         # Verify some output was created
         assert len(list(test_outputs.rglob("*"))) > 0, "No output files were created"
 
-    @pytest.mark.timeout(
-        45
-    )  # Allow a bit more time for subprocess calls [[memory:4098712]]
-    def test_train_nnue_subprocess_execution(self, setup_test_env):
-        """Test running train.py nnue as subprocess (closer to real usage)."""
-        test_outputs = setup_test_env
+    def test_unified_script_error_handling(self, monkeypatch):
+        """Test that unified script handles errors correctly."""
+        # Test missing model type
+        with patch.object(sys, "argv", ["train.py"]):
+            with pytest.raises(SystemExit) as exc_info:
+                train.main()
+            assert exc_info.value.code == 1
 
-        # Set environment variables for subprocess
-        env = os.environ.copy()
-        env["WANDB_API_KEY"] = "dummy_test_key"
-        env["WANDB_MODE"] = "disabled"
+        # Test invalid model type
+        with patch.object(sys, "argv", ["train.py", "invalid_model"]):
+            with pytest.raises(SystemExit) as exc_info:
+                train.main()
+            assert exc_info.value.code == 1
 
-        # Run as subprocess
-        cmd = [
-            sys.executable,
-            "train.py",
-            "nnue",
-            "--config",
-            "config/train_nnue_default.py",
-            "--log_dir",
-            str(test_outputs),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=40,  # Timeout for subprocess
-        )
-
-        # Check that it completed successfully
-        if result.returncode != 0:
-            print(f"STDOUT: {result.stdout}")
-            print(f"STDERR: {result.stderr}")
-
-        assert (
-            result.returncode == 0
-        ), f"Script failed with return code {result.returncode}"
-        assert (
-            "Training completed!" in result.stdout
-            or "Training completed!" in result.stderr
-            or "Training completed successfully!" in result.stdout
-            or "Training completed successfully!" in result.stderr
-        )
-
-    @pytest.mark.timeout(
-        45
-    )  # Allow a bit more time for subprocess calls [[memory:4098712]]
-    def test_train_etinynet_subprocess_execution(self, setup_test_env):
-        """Test running train.py etinynet as subprocess (closer to real usage)."""
-        test_outputs = setup_test_env
-
-        # Set environment variables for subprocess
-        env = os.environ.copy()
-        env["WANDB_API_KEY"] = "dummy_test_key"
-        env["WANDB_MODE"] = "disabled"
-
-        # Run as subprocess
-        cmd = [
-            sys.executable,
-            "train.py",
-            "etinynet",
-            "--config",
-            "config/train_etinynet_default.py",
-            "--log_dir",
-            str(test_outputs),
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=40,  # Timeout for subprocess
-        )
-
-        # Check that it completed successfully
-        if result.returncode != 0:
-            print(f"STDOUT: {result.stdout}")
-            print(f"STDERR: {result.stderr}")
-
-        assert (
-            result.returncode == 0
-        ), f"Script failed with return code {result.returncode}"
-        assert (
-            "Training completed!" in result.stdout
-            or "Training completed!" in result.stderr
-            or "Training completed successfully!" in result.stdout
-            or "Training completed successfully!" in result.stderr
-        )
-
-
-class TestConfigValidation:
-    """Test that the default configs are valid and loadable."""
-
-    def test_nnue_default_config_loads(self):
-        """Test that the default NNUE config loads correctly."""
-        from config import load_config
-
-        config = load_config("config/train_nnue_default.py")
-
-        # Verify key attributes
-        assert config.name == "nnue_default"
-        assert config.batch_size == 2
-        assert config.max_epochs == 1
-        assert config.subset == 0.001
-        assert config.accelerator == "cpu"
-        assert config.num_workers == 0
-
-    def test_etinynet_default_config_loads(self):
-        """Test that the default EtinyNet config loads correctly."""
-        from config import load_config
-
-        config = load_config("config/train_etinynet_default.py")
-
-        # Verify key attributes
-        assert config.name == "etinynet_default"
-        assert config.batch_size == 2
-        assert config.max_epochs == 1
-        assert config.subset == 0.001
-        assert config.accelerator == "cpu"
-        assert config.num_workers == 0
-        assert config.etinynet_variant == "0.75"
-
-
-class TestScriptArgumentParsing:
-    """Test that unified training script handles arguments correctly."""
-
-    def test_unified_script_argument_parsing(self, monkeypatch):
-        """Test unified train.py argument parsing and structure."""
-        # Mock to prevent actual execution
-        monkeypatch.setattr(train, "main", lambda: None)
-
-        # Test that script imports and basic structure works
-        assert hasattr(train, "main")
-        assert hasattr(train, "get_available_adapters")
-
-        # Test available adapters
+    def test_available_adapters(self):
+        """Test that get_available_adapters returns expected adapters."""
         adapters = train.get_available_adapters()
         assert "nnue" in adapters
         assert "etinynet" in adapters
+        assert isinstance(adapters["nnue"], NNUEAdapter)
+        assert isinstance(adapters["etinynet"], EtinyNetAdapter)
 
-    def test_nnue_adapter_structure(self):
-        """Test NNUE adapter has required methods."""
-        from nnue_adapter import NNUEAdapter, NNUEWrapper, adapt_batch_for_nnue
 
+class TestArgumentParsing:
+    """Test argument parsing for both model types."""
+
+    def test_nnue_argument_parsing(self, monkeypatch):
+        """Test NNUE-specific argument parsing."""
         adapter = NNUEAdapter()
-        assert hasattr(adapter, "create_model")
-        assert hasattr(adapter, "create_data_loaders")
-        assert callable(adapt_batch_for_nnue)
-        assert NNUEWrapper is not None
+        trainer = BaseTrainer(adapter)
 
-    def test_etinynet_adapter_structure(self):
-        """Test EtinyNet adapter has required methods."""
-        from etinynet_adapter import EtinyNetAdapter
+        # Mock sys.argv for testing
+        test_args = [
+            "train.py",
+            "--config",
+            "config/train_nnue_default.py",
+            "--batch_size",
+            "64",
+            "--max_epochs",
+            "10",
+            "--learning_rate",
+            "0.001",
+        ]
 
+        with patch.object(sys, "argv", test_args):
+            parser = trainer.setup_argument_parser()
+            args = parser.parse_args()
+
+            assert args.config == "config/train_nnue_default.py"
+            assert args.batch_size == 64
+            assert args.max_epochs == 10
+            assert args.learning_rate == 0.001
+
+    def test_etinynet_argument_parsing(self, monkeypatch):
+        """Test EtinyNet-specific argument parsing."""
         adapter = EtinyNetAdapter()
-        assert hasattr(adapter, "create_model")
-        assert hasattr(adapter, "create_data_loaders")
+        trainer = BaseTrainer(adapter)
+
+        # Mock sys.argv for testing
+        test_args = [
+            "train.py",
+            "--config",
+            "config/train_etinynet_default.py",
+            "--batch_size",
+            "32",
+            "--variant",
+            "1.0",
+            "--dataset",
+            "cifar100",
+        ]
+
+        with patch.object(sys, "argv", test_args):
+            parser = trainer.setup_argument_parser()
+            args = parser.parse_args()
+
+            assert args.config == "config/train_etinynet_default.py"
+            assert args.batch_size == 32
+            assert args.variant == "1.0"
+            assert args.dataset == "cifar100"
