@@ -15,8 +15,8 @@ visual_threshold = 0.0
 # Dataset and model settings
 batch_size = 32  # GPU-friendly
 num_workers = 4  # Reasonable parallelism
-input_size = (96, 96)  # Visual Wake Words crop size
-num_classes = 2  # Person / No-person
+input_size = (96, 96)  # Standard input size
+num_classes = 10  # CIFAR-10 classes
 learning_rate = 3e-4  # Good starting LR for Adam
 subset = 1.0  # Use full dataset
 
@@ -39,4 +39,4 @@ check_val_every_n_epoch = 1
 
 # Logging backends
 log_dir = "logs"
-project_name = "visual_wake_words_gpu"
+project_name = "nnue-vision-train"

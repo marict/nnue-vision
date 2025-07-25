@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from pytorch_lightning.callbacks import Callback
 
 import wandb
@@ -58,8 +59,6 @@ class NNUEWrapper(pl.LightningModule):
 
     def _compute_loss(self, batch, batch_idx):
         """Compute loss without logging (internal version of NNUE step_)"""
-        # This replicates the NNUE step_ method but without logging
-
         # We clip weights at the start of each step. This means that after
         # the last step the weights might be outside of the desired range.
         # They should be also clipped accordingly in the serializer.
@@ -73,31 +72,39 @@ class NNUEWrapper(pl.LightningModule):
         ) = batch
 
         # Forward pass
-        scorenet = self.nnue(images, layer_stack_indices) * self.nnue.nnue2score
+        logits = self.nnue(images, layer_stack_indices)
 
-        p = self.nnue.loss_params
-        # convert the network and search scores to an estimate match result
-        # based on the win_rate_model, with scalings and offsets optimized
-        q = (scorenet - p.in_offset) / p.in_scaling
-        qm = (-scorenet - p.in_offset) / p.in_scaling
-        qf = 0.5 * (1.0 + q.sigmoid() - qm.sigmoid())
+        # Use different loss functions based on number of classes
+        if self.nnue.num_classes > 1:
+            # Multi-class classification: use CrossEntropyLoss
+            loss = F.cross_entropy(logits, targets.long())
+        else:
+            # Original NNUE loss for single output (chess-style evaluation)
+            scorenet = logits * self.nnue.nnue2score
 
-        s = (scores - p.out_offset) / p.out_scaling
-        sm = (-scores - p.out_offset) / p.out_scaling
-        pf = 0.5 * (1.0 + s.sigmoid() - sm.sigmoid())
+            p = self.nnue.loss_params
+            # convert the network and search scores to an estimate match result
+            # based on the win_rate_model, with scalings and offsets optimized
+            q = (scorenet - p.in_offset) / p.in_scaling
+            qm = (-scorenet - p.in_offset) / p.in_scaling
+            qf = 0.5 * (1.0 + q.sigmoid() - qm.sigmoid())
 
-        # blend that eval based score with the actual targets
-        t = targets
-        actual_lambda = p.start_lambda + (p.end_lambda - p.start_lambda) * (
-            self.current_epoch / self.nnue.max_epoch
-        )
-        pt = pf * actual_lambda + t * (1.0 - actual_lambda)
+            s = (scores - p.out_offset) / p.out_scaling
+            sm = (-scores - p.out_offset) / p.out_scaling
+            pf = 0.5 * (1.0 + s.sigmoid() - sm.sigmoid())
 
-        # use a MSE-like loss function
-        loss = torch.pow(torch.abs(pt - qf), p.pow_exp)
-        if p.qp_asymmetry != 0.0:
-            loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
-        loss = loss.mean()
+            # blend that eval based score with the actual targets
+            t = targets
+            actual_lambda = p.start_lambda + (p.end_lambda - p.start_lambda) * (
+                self.current_epoch / self.nnue.max_epoch
+            )
+            pt = pf * actual_lambda + t * (1.0 - actual_lambda)
+
+            # use a MSE-like loss function
+            loss = torch.pow(torch.abs(pt - qf), p.pow_exp)
+            if p.qp_asymmetry != 0.0:
+                loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
+            loss = loss.mean()
 
         return loss
 
@@ -157,6 +164,7 @@ class NNUEAdapter(ModelAdapter):
             loss_params=loss_params,
             num_ls_buckets=getattr(config, "num_ls_buckets", 8),
             visual_threshold=getattr(config, "visual_threshold", 0.0),
+            num_classes=getattr(config, "num_classes", 1),
         )
 
         # Wrap NNUE model to handle data format adaptation
@@ -173,6 +181,7 @@ class NNUEAdapter(ModelAdapter):
             num_workers=getattr(config, "num_workers", 4),
             target_size=getattr(config, "input_size", (96, 96)),
             subset=getattr(config, "subset", 1.0),
+            binary_classification=getattr(config, "binary_classification", None),
         )
 
     def get_callbacks(self, config: Any, log_dir: str) -> List[Callback]:

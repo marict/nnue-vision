@@ -268,7 +268,7 @@ def start_cloud_training(
             min_memory_in_gb=16,
             volume_in_gb=1000,
             container_disk_in_gb=1000,
-            network_volume_id="h3tyejvqqb",  # Update this to your network volume ID
+            network_volume_id="h3tyejvqqb",
             env={
                 "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
                 "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:512",

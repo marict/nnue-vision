@@ -679,7 +679,12 @@ class FeatureTransformer(nn.Module):
 
 class LayerStacks(nn.Module):
     def __init__(
-        self, count, l1_size=DEFAULT_L1, l2_size=DEFAULT_L2, l3_size=DEFAULT_L3
+        self,
+        count,
+        l1_size=DEFAULT_L1,
+        l2_size=DEFAULT_L2,
+        l3_size=DEFAULT_L3,
+        num_classes=1,
     ):
         super(LayerStacks, self).__init__()
 
@@ -687,6 +692,7 @@ class LayerStacks(nn.Module):
         self.l1_size = l1_size
         self.l2_size = l2_size
         self.l3_size = l3_size
+        self.num_classes = num_classes
 
         self.l1 = nn.Linear(l1_size, (l2_size + 1) * count)
         # Factorizer only for the first layer because later
@@ -695,7 +701,7 @@ class LayerStacks(nn.Module):
         # able to diverge a lot.
         self.l1_fact = nn.Linear(l1_size, l2_size + 1, bias=True)
         self.l2 = nn.Linear(l2_size * 2, l3_size * count)
-        self.output = nn.Linear(l3_size, 1 * count)
+        self.output = nn.Linear(l3_size, num_classes * count)
 
         # Cached helper tensor for choosing outputs by bucket indices.
         # Initialized lazily in forward.
@@ -765,8 +771,8 @@ class LayerStacks(nn.Module):
         l2c_ = l2s_.view(-1, self.l3_size)[indices]
         l2x_ = torch.clamp(l2c_, 0.0, 1.0)
 
-        l3s_ = self.output(l2x_).reshape((-1, self.count, 1))
-        l3c_ = l3s_.view(-1, 1)[indices]
+        l3s_ = self.output(l2x_).reshape((-1, self.count, self.num_classes))
+        l3c_ = l3s_.view(-1, self.num_classes)[indices]
         l3x_ = l3c_ + l1f_out + l1c_out
 
         return l3x_
@@ -840,6 +846,7 @@ class NNUE(pl.LightningModule):
         num_ls_buckets=8,
         loss_params=LossParams(),
         visual_threshold=0.0,
+        num_classes=1,
     ):
         super(NNUE, self).__init__()
 
@@ -854,6 +861,7 @@ class NNUE(pl.LightningModule):
         self.l3_size = l3_size
         self.num_ls_buckets = num_ls_buckets
         self.visual_threshold = visual_threshold
+        self.num_classes = num_classes
 
         # Calculate conv output channels based on feature set
         # For grid-based features, we need enough channels to cover all features per square
@@ -893,7 +901,9 @@ class NNUE(pl.LightningModule):
         self.input = FeatureTransformer(self.feature_set.num_features, l1_size)
 
         # Standard layer stacks (no optimizations)
-        self.layer_stacks = LayerStacks(num_ls_buckets, l1_size, l2_size, l3_size)
+        self.layer_stacks = LayerStacks(
+            num_ls_buckets, l1_size, l2_size, l3_size, num_classes
+        )
 
         self.loss_params = loss_params
         self.max_epoch = max_epoch
