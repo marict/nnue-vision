@@ -388,7 +388,6 @@ class TestConfigurationValidation:
         assert isinstance(config.batch_size, int)
         assert isinstance(config.max_epochs, int)
         assert isinstance(config.learning_rate, (int, float))
-        assert isinstance(config.use_wandb, bool)
         assert isinstance(config.use_asq, bool)
 
     def test_model_config_compatibility(self):

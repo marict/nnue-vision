@@ -10,6 +10,7 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 
+import runpod_service
 import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
@@ -442,12 +443,10 @@ def main():
     if wandb_api_key:
         os.environ["WANDB_API_KEY"] = wandb_api_key
 
-    use_wandb = getattr(config, "use_wandb", True)
-    if use_wandb and not os.getenv("WANDB_API_KEY"):
-        early_log(
-            "⚠️  Warning: WANDB_API_KEY not found. Wandb logging may not work properly."
-        )
+    if not os.getenv("WANDB_API_KEY"):
+        early_log("❌ Error: WANDB_API_KEY not found. WandB logging is required.")
         early_log("💡 Set the environment variable or use --wandb_api_key argument.")
+        raise ValueError("WANDB_API_KEY is required for training")
 
     # Set random seed for reproducibility
     pl.seed_everything(getattr(config, "seed", 42))
@@ -483,27 +482,16 @@ def main():
     log_dir = getattr(config, "log_dir", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
-    loggers = []
+    # Setup wandb logger (always required)
+    wandb_logger = setup_wandb_logger(config)
+    loggers = [wandb_logger]
 
-    # Setup wandb logger if enabled
-    if use_wandb:
-        wandb_logger = setup_wandb_logger(config)
-        loggers.append(wandb_logger)
+    # Log git information to wandb for experiment tracking
+    early_log("📤 Logging git information to W&B...")
+    log_git_info_to_wandb(wandb_logger.experiment)
 
-        # Log git information to wandb for experiment tracking
-        early_log("📤 Logging git information to W&B...")
-        log_git_info_to_wandb(wandb_logger.experiment)
-
-        # Replay early logs to wandb
-        replay_early_logs_to_wandb()
-
-    # Optional TensorBoard logger
-    use_tensorboard = getattr(config, "use_tensorboard", False)
-    if use_tensorboard:
-        tb_logger = pl_loggers.TensorBoardLogger(
-            save_dir=log_dir, name=getattr(config, "project_name", "visual_wake_words")
-        )
-        loggers.append(tb_logger)
+    # Replay early logs to wandb
+    replay_early_logs_to_wandb()
 
     # Set up callbacks
     callbacks = [
@@ -523,9 +511,8 @@ def main():
         ),
     ]
 
-    # Add wandb metrics callback only if using wandb
-    if use_wandb:
-        callbacks.insert(1, WandbMetricsCallback())
+    # Add wandb metrics callback (always required)
+    callbacks.insert(1, WandbMetricsCallback())
 
     # Set up trainer
     devices = getattr(config, "devices", "auto")
@@ -554,15 +541,13 @@ def main():
     print(
         f"Image size: {getattr(config, 'input_size', (96, 96))[0]}x{getattr(config, 'input_size', (96, 96))[1]}"
     )
-    if use_wandb and loggers:
-        wandb_logger = next(
-            (logger for logger in loggers if isinstance(logger, WandbLogger)), None
-        )
-        if wandb_logger:
-            print(
-                f"Wandb project: {getattr(config, 'project_name', 'visual_wake_words')}"
-            )
-            print(f"Wandb run URL: {wandb_logger.experiment.url}")
+    # Display wandb information (always available)
+    wandb_logger = next(
+        (logger for logger in loggers if isinstance(logger, WandbLogger)), None
+    )
+    if wandb_logger:
+        print(f"Wandb project: {getattr(config, 'project_name', 'visual_wake_words')}")
+        print(f"Wandb run URL: {wandb_logger.experiment.url}")
 
     # Train the model
     trainer.fit(model, train_loader, val_loader)
@@ -571,8 +556,8 @@ def main():
     print("Testing the model...")
     test_results = trainer.test(model, test_loader)
 
-    # Log final test results to wandb if enabled
-    if use_wandb and test_results:
+    # Log final test results to wandb (always required)
+    if test_results:
         wandb.log(
             {
                 "final/test_loss": test_results[0]["test_loss"],
@@ -580,11 +565,10 @@ def main():
             }
         )
 
-    # Log sample predictions on test set if wandb is enabled
-    if use_wandb:
-        print("Logging sample predictions...")
-        device = next(model.parameters()).device
-        log_sample_predictions(model, test_loader, device, num_samples=16)
+    # Log sample predictions on test set (always required)
+    print("Logging sample predictions...")
+    device = next(model.parameters()).device
+    log_sample_predictions(model, test_loader, device, num_samples=16)
 
     # Save final model
     project_name = getattr(config, "project_name", "visual_wake_words")
@@ -593,11 +577,10 @@ def main():
     torch.save(model.state_dict(), final_model_path)
     print(f"Final model saved to: {final_model_path}")
 
-    # Save model as wandb artifact if enabled
-    if use_wandb:
-        artifact = wandb.Artifact("final_model", type="model")
-        artifact.add_file(str(final_model_path))
-        wandb.log_artifact(artifact)
+    # Save model as wandb artifact (always required)
+    artifact = wandb.Artifact("final_model", type="model")
+    artifact.add_file(str(final_model_path))
+    wandb.log_artifact(artifact)
 
     print("Training completed!")
 
@@ -605,21 +588,44 @@ def main():
     final_disk_usage = get_disk_usage_percent()
     print(f"📊 Final disk usage: {final_disk_usage:.1f}%")
 
-    if use_wandb:
-        # Log final system stats to wandb
-        wandb.log(
-            {
-                "final/disk_usage_percent": final_disk_usage,
-                "final/training_completed": True,
-            }
-        )
+    # Log final system stats to wandb (always required)
+    wandb.log(
+        {
+            "final/disk_usage_percent": final_disk_usage,
+            "final/training_completed": True,
+        }
+    )
 
-        print("🎯 Training metrics and git info logged to W&B")
+    print("🎯 Training metrics and git info logged to W&B")
 
-    # Finish wandb run if used
-    if use_wandb:
-        wandb.finish()
+    # Finish wandb run (always required)
+    wandb.finish()
+
+    # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
+    if os.getenv("RUNPOD_POD_ID") and not getattr(config, "keep_alive", False):
+        try:
+            runpod_service.stop_runpod()
+        except ImportError:
+            pass  # runpod_service not available in this environment
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Fatal error in training: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        # Stop RunPod instance on error if we're running on RunPod
+        if os.getenv("RUNPOD_POD_ID"):
+            try:
+                import runpod_service
+
+                runpod_service.stop_runpod()
+            except ImportError:
+                pass  # runpod_service not available in this environment
+
+        # Re-raise the exception to ensure proper exit code
+        raise

@@ -29,8 +29,7 @@ enable_progress_bar = True
 check_val_every_n_epoch = 1
 
 # Logging backends - disabled for testing
-use_wandb = False  # Disabled for testing
-use_tensorboard = False  # Disabled for testing
+
 log_dir = "logs"
 project_name = "visual_wake_words_test"
 

@@ -141,12 +141,10 @@ def main():
     if wandb_api_key:
         os.environ["WANDB_API_KEY"] = wandb_api_key
 
-    use_wandb = getattr(config, "use_wandb", True)
-    if use_wandb and not os.getenv("WANDB_API_KEY"):
-        early_log(
-            "⚠️  Warning: WANDB_API_KEY not found. Wandb logging may not work properly."
-        )
+    if not os.getenv("WANDB_API_KEY"):
+        early_log("❌ Error: WANDB_API_KEY not found. WandB logging is required.")
         early_log("💡 Set the environment variable or use --wandb_api_key argument.")
+        raise ValueError("WANDB_API_KEY is required for training")
 
     # Set random seed for reproducibility
     pl.seed_everything(getattr(config, "seed", 42))
@@ -193,44 +191,33 @@ def main():
     if hasattr(config, "note") and config.note:
         run_name += f"_{config.note}"
 
-    # Wandb logger
-    if use_wandb and os.getenv("WANDB_API_KEY"):
-        early_log("🔗 Setting up Wandb logging...")
-        project_name = getattr(config, "project_name", f"etinynet_{dataset_name}")
-        wandb_logger = WandbLogger(
-            project=project_name,
-            name=run_name,
-            save_dir=log_dir,
+    # Wandb logger (always required)
+    early_log("🔗 Setting up Wandb logging...")
+    project_name = getattr(config, "project_name", f"etinynet_{dataset_name}")
+    wandb_logger = WandbLogger(
+        project=project_name,
+        name=run_name,
+        save_dir=log_dir,
+    )
+    loggers = [wandb_logger]
+
+    # Log configuration to wandb
+    if hasattr(wandb_logger, "experiment"):
+        wandb_logger.experiment.config.update(
+            {
+                "model_type": "EtinyNet",
+                "variant": variant,
+                "dataset": dataset_name,
+                "num_classes": num_classes,
+                "parameters": model.count_parameters(),
+                "config_file": args.config,
+                **{k: v for k, v in vars(config).items() if not k.startswith("_")},
+            }
         )
-        loggers.append(wandb_logger)
 
-        # Log configuration to wandb
-        if hasattr(wandb_logger, "experiment"):
-            wandb_logger.experiment.config.update(
-                {
-                    "model_type": "EtinyNet",
-                    "variant": variant,
-                    "dataset": dataset_name,
-                    "num_classes": num_classes,
-                    "parameters": model.count_parameters(),
-                    "config_file": args.config,
-                    **{k: v for k, v in vars(config).items() if not k.startswith("_")},
-                }
-            )
-
-        # Log git info and replay early logs
-        log_git_info_to_wandb(wandb_logger.experiment)
-        replay_early_logs_to_wandb(wandb_logger.experiment)
-
-    # TensorBoard logger
-    if getattr(config, "use_tensorboard", False):
-        early_log("📊 Setting up TensorBoard logging...")
-        tb_logger = pl_loggers.TensorBoardLogger(
-            save_dir=log_dir,
-            name="etinynet_tensorboard",
-            version=run_name,
-        )
-        loggers.append(tb_logger)
+    # Log git info and replay early logs
+    log_git_info_to_wandb(wandb_logger.experiment)
+    replay_early_logs_to_wandb(wandb_logger.experiment)
 
     # Model checkpointing
     checkpoint_callback = ModelCheckpoint(
@@ -285,15 +272,15 @@ def main():
     print(f"Dataset: {dataset_name.upper()} ({num_classes} classes)")
     print(f"Learning rate: {getattr(config, 'learning_rate', 0.1)}")
     print(f"Batch size: {getattr(config, 'batch_size', 64)}")
-    if use_wandb and loggers:
-        wandb_logger = next(
-            (logger for logger in loggers if isinstance(logger, WandbLogger)), None
+    # Display wandb information (always available)
+    wandb_logger = next(
+        (logger for logger in loggers if isinstance(logger, WandbLogger)), None
+    )
+    if wandb_logger:
+        print(
+            f"Wandb project: {getattr(config, 'project_name', f'etinynet_{dataset_name}')}"
         )
-        if wandb_logger:
-            print(
-                f"Wandb project: {getattr(config, 'project_name', f'etinynet_{dataset_name}')}"
-            )
-            print(f"Wandb run URL: {wandb_logger.experiment.url}")
+        print(f"Wandb run URL: {wandb_logger.experiment.url}")
 
     # Train the model
     trainer.fit(model, train_loader, val_loader)
@@ -302,8 +289,8 @@ def main():
     print("Testing the model...")
     test_results = trainer.test(model, test_loader)
 
-    # Log final test results to wandb if enabled
-    if use_wandb and test_results:
+    # Log final test results to wandb (always required)
+    if test_results:
         wandb.log(
             {
                 "final/test_loss": test_results[0]["test_loss"],
@@ -318,8 +305,15 @@ def main():
     torch.save(model.state_dict(), final_model_path)
     early_log(f"💾 Saved final model to: {final_model_path}")
 
-    if use_wandb:
-        wandb.finish()
+    # Finish wandb run (always required)
+    wandb.finish()
+
+    # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
+    if os.getenv("RUNPOD_POD_ID") and not getattr(config, "keep_alive", False):
+        try:
+            runpod_service.stop_runpod()
+        except ImportError:
+            pass  # runpod_service not available in this environment
 
     early_log("🎉 Training completed successfully!")
     print(f"\nTo serialize this model for C++ engine:")
@@ -331,4 +325,22 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    try:
+        exit(main())
+    except Exception as e:
+        print(f"Fatal error in EtinyNet training: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+        # Stop RunPod instance on error if we're running on RunPod
+        if os.getenv("RUNPOD_POD_ID"):
+            try:
+                import runpod_service
+
+                runpod_service.stop_runpod()
+            except ImportError:
+                pass  # runpod_service not available in this environment
+
+        # Re-raise the exception to ensure proper exit code
+        raise

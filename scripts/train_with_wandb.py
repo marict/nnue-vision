@@ -20,7 +20,6 @@ def run_training_experiment(
     image_size: int = 96,
     note: str = None,
     wandb_api_key: str = None,
-    use_tensorboard: bool = False,
     gpus: str = None,
 ):
     """
@@ -34,7 +33,6 @@ def run_training_experiment(
         image_size: Input image size (square)
         note: Optional note to add to run name
         wandb_api_key: Wandb API key (if not set as env var)
-        use_tensorboard: Whether to also log to TensorBoard
         gpus: GPU specification (e.g., "0,1" or "auto")
     """
 
@@ -63,9 +61,6 @@ def run_training_experiment(
 
     if wandb_api_key:
         cmd.extend(["--wandb_api_key", wandb_api_key])
-
-    if use_tensorboard:
-        cmd.append("--use_tensorboard")
 
     if gpus:
         cmd.extend(["--gpus", gpus])

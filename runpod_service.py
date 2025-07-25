@@ -166,6 +166,7 @@ def start_cloud_training(
             env={
                 "WANDB_API_KEY": os.getenv("WANDB_API_KEY", ""),
                 "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:512",
+                "RUNPOD_API_KEY": runpod.api_key,
             },
             start_ssh=False,
             docker_args=final_docker_args,
