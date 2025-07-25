@@ -248,10 +248,15 @@ def log_sample_predictions(model, val_loader, device, num_samples=8):
             else f"Unknown({pred_label})"
         )
 
+        # Denormalize image for proper visualization
+        # ImageNet normalization parameters used in data pipeline
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        denorm_img = torch.clamp(img * std + mean, 0, 1)
+
         # Convert tensor to wandb image format
-        # Note: images are normalized, so we need to denormalize for visualization
         wandb_img = wandb.Image(
-            img,
+            denorm_img,
             caption=f"True: {true_label_name}, Pred: {pred_label_name} ({confidence:.3f})",
         )
         wandb_images.append(wandb_img)
