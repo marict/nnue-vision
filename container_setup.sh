@@ -29,8 +29,20 @@ fi
 #---------------------------------------------------------------------------#
 # system pkgs (guard against readonly images)
 #---------------------------------------------------------------------------#
-apt-get update || true
-apt-get install -y --no-install-recommends tree htop
+# Robust apt update (NVIDIA repo occasionally has sync issues)
+log "updating apt repositories"
+if ! apt-get update; then
+    log "apt-get update failed – disabling NVIDIA repo and retrying"
+    # Comment out any NVIDIA repository lines to avoid blocking the update
+    if ls /etc/apt/sources.list.d | grep -qi nvidia; then
+        sed -i 's|^deb .*nvidia.*|# &|' /etc/apt/sources.list.d/*.list || true
+    fi
+    # Retry once more (ignore failure so script continues)
+    apt-get update || true
+fi
+
+# Install useful CLI tools (best-effort – do not abort on failure)
+apt-get install -y --no-install-recommends tree htop || true
 
 #---------------------------------------------------------------------------#
 # python deps
