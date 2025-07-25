@@ -39,6 +39,13 @@ AVAILABLE_DATASETS = {
         "input_size": (32, 32),
         "channels": 3,
     },
+    "imagenet": {
+        "name": "ImageNet",
+        "classes": [f"n{i:08d}" for i in range(1000)],  # WordNet IDs simplified
+        "num_classes": 1000,
+        "input_size": (224, 224),
+        "channels": 3,
+    },
 }
 
 __all__ = ["GenericVisionDataset", "AVAILABLE_DATASETS", "get_dataset_info"]
@@ -163,6 +170,14 @@ class GenericVisionDataset(Dataset):
                 train=is_train,
                 download=True,
                 transform=None,
+            )
+        elif self.dataset_name == "imagenet":
+            # Map splits for ImageNet
+            split_name = "train" if is_train else "val"
+            return datasets.ImageNet(
+                root=self.data_root,
+                split=split_name,
+                transform=None,  # We'll apply transform manually
             )
         else:
             raise ValueError(f"Unsupported dataset: {self.dataset_name}")

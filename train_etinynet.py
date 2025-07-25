@@ -97,7 +97,7 @@ def main():
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["cifar10", "cifar100"],
+        choices=["cifar10", "cifar100", "imagenet"],
         default="cifar10",
         help="Dataset to use for training",
     )
