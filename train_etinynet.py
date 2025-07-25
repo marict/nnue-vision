@@ -239,7 +239,7 @@ def main():
 
     # Log git info and replay early logs
     log_git_info_to_wandb(wandb_logger.experiment)
-    replay_early_logs_to_wandb(wandb_logger.experiment)
+    replay_early_logs_to_wandb()
 
     # Model checkpointing
     checkpoint_callback = ModelCheckpoint(
@@ -315,8 +315,8 @@ def main():
     if test_results:
         wandb.log(
             {
-                "final/test_loss": test_results[0]["test_loss"],
-                "final/test_acc": test_results[0]["test_acc"],
+                "final/test_loss": test_results[0].get("test_loss", 0.0),
+                "final/test_acc": test_results[0].get("test_acc", 0.0),
             }
         )
 

@@ -207,12 +207,27 @@ def log_sample_predictions(model, val_loader, device, num_samples=8):
     labels = labels[:num_samples]
 
     with torch.no_grad():
-        logits = model(images)
+        # Generate layer stack indices for NNUE (random bucket selection)
+        batch_size = images.shape[0]
+        # Get number of buckets from the model
+        num_buckets = getattr(model, "num_ls_buckets", 8)
+        layer_stack_indices = torch.randint(
+            0, num_buckets, (batch_size,), device=device
+        )
+
+        logits = model(images, layer_stack_indices)
         probs = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
 
     # Create wandb images with predictions
-    class_names = ["No Person", "Person"]
+    # Determine number of classes from the data
+    num_classes = logits.shape[1]
+    if num_classes == 2:
+        class_names = ["No Person", "Person"]
+    else:
+        # For other datasets like CIFAR-10, use generic class names
+        class_names = [f"Class {i}" for i in range(num_classes)]
+
     wandb_images = []
 
     for i in range(len(images)):
@@ -221,11 +236,23 @@ def log_sample_predictions(model, val_loader, device, num_samples=8):
         pred_label = preds[i].item()
         confidence = probs[i][pred_label].item()
 
+        # Ensure labels are within bounds
+        true_label_name = (
+            class_names[true_label]
+            if true_label < len(class_names)
+            else f"Unknown({true_label})"
+        )
+        pred_label_name = (
+            class_names[pred_label]
+            if pred_label < len(class_names)
+            else f"Unknown({pred_label})"
+        )
+
         # Convert tensor to wandb image format
         # Note: images are normalized, so we need to denormalize for visualization
         wandb_img = wandb.Image(
             img,
-            caption=f"True: {class_names[true_label]}, Pred: {class_names[pred_label]} ({confidence:.3f})",
+            caption=f"True: {true_label_name}, Pred: {pred_label_name} ({confidence:.3f})",
         )
         wandb_images.append(wandb_img)
 
@@ -401,6 +428,7 @@ def main():
     # Configuration file
     parser.add_argument(
         "--config",
+        default="config/train_nnue_default.py",
         type=str,
         help="Path to the configuration file",
     )
@@ -586,8 +614,8 @@ def main():
     if test_results:
         wandb.log(
             {
-                "final/test_loss": test_results[0]["test_loss"],
-                "final/test_acc": test_results[0]["test_acc"],
+                "final/test_loss": test_results[0].get("test_loss", 0.0),
+                "final/test_acc": test_results[0].get("test_acc", 0.0),
             }
         )
 
