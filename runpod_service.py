@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 
 import requests
 import runpod
@@ -444,6 +445,20 @@ For complete usage guide, run: python runpod_service.py help
     if args.cmd == "help":
         print_training_help()
     elif args.cmd == "train":
+        # Check if user mistakenly passed a training script as positional argument
+        if args.train_args and len(args.train_args) > 0:
+            first_arg = args.train_args[0]
+            if first_arg in ["train_nnue.py", "train_etinynet.py"]:
+                print(
+                    f"\nERROR: It looks like you're trying to run '{first_arg}' but passed it as a positional argument."
+                )
+                print(f"Please use the --script flag instead:\n")
+                print(
+                    f"  python runpod_service.py train --script {first_arg} {' '.join(args.train_args[1:])}"
+                )
+                print("\nFor more help, run: python runpod_service.py help")
+                sys.exit(1)
+
         train_args_str = " ".join(args.train_args) if args.train_args else ""
         start_cloud_training(
             train_args_str,
