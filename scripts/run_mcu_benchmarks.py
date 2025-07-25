@@ -15,10 +15,13 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Dict, Tuple
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 from torch.utils.data import DataLoader
 
@@ -180,9 +183,6 @@ def load_model(model_path: Path, device: torch.device) -> NNUE:
 def generate_benchmark_plots(benchmark_results: Dict, output_dir: Path) -> None:
     """Generate visualization plots for benchmark results."""
     try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-
         # Set style
         plt.style.use("seaborn-v0_8")
         sns.set_palette("husl")
@@ -391,7 +391,6 @@ def main():
 
     # Save MCU simulation results separately
     mcu_results_path = args.output_dir / f"mcu_simulation_{actual_dataset_name}.json"
-    import json
 
     with open(mcu_results_path, "w") as f:
         json.dump(mcu_results, f, indent=2, default=str)

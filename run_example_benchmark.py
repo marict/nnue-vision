@@ -7,7 +7,7 @@ TinyML-style comparison reports. Run this after training a model.
 
 Usage:
     # Train a model first
-    python train.py --config config/train_default.py --max_epochs 20
+    python train_nnue.py --config config/train_default.py --max_epochs 20
 
     # Then run this benchmark
     python run_example_benchmark.py
@@ -95,7 +95,9 @@ def main():
             model = create_example_model()
     else:
         print("⚠️  No trained model found, using randomly initialized model")
-        print("   (For real benchmarks, train a model first with: python train.py)")
+        print(
+            "   (For real benchmarks, train a model first with: python train_nnue.py)"
+        )
         model = create_example_model()
 
     model.eval()
@@ -186,7 +188,9 @@ def main():
     print(f"\n✅ Example benchmark complete!")
 
     print(f"\n🚀 Next Steps:")
-    print(f"   1. Train a real model: python train.py --config config/train_default.py")
+    print(
+        f"   1. Train a real model: python train_nnue.py --config config/train_default.py"
+    )
     print(
         f"   2. Run full benchmark: python scripts/run_mcu_benchmarks.py --model model.pt"
     )

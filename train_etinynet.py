@@ -24,6 +24,7 @@ Example configs for EtinyNet:
 
 import argparse
 import os
+import traceback
 from pathlib import Path
 
 import pytorch_lightning as pl
@@ -32,6 +33,7 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 
+import runpod_service
 import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
@@ -70,7 +72,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="config/train_default.py",
+        default="config/train_etinynet_default.py",
         help="Path to the configuration file",
     )
 
@@ -329,15 +331,11 @@ if __name__ == "__main__":
         exit(main())
     except Exception as e:
         print(f"Fatal error in EtinyNet training: {e}")
-        import traceback
-
         traceback.print_exc()
 
         # Stop RunPod instance on error if we're running on RunPod
         if os.getenv("RUNPOD_POD_ID"):
             try:
-                import runpod_service
-
                 runpod_service.stop_runpod()
             except ImportError:
                 pass  # runpod_service not available in this environment

@@ -1,6 +1,11 @@
 """Test configuration and fixtures for NNUE-Vision tests."""
 
 import tempfile
+
+# ---------------------------------------------------------------------------
+# Global warning filters to keep test output clean (no functional impact)
+# ---------------------------------------------------------------------------
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -8,6 +13,34 @@ import pytest
 import torch
 import torch.nn as nn
 from PIL import Image
+
+# Ignore GPU‐available warnings when CPU fallback is used (common on CI/M1)
+warnings.filterwarnings(
+    "ignore",
+    message=r"GPU available .+ not used",
+    category=UserWarning,
+)
+
+# Ignore Lightning suggestion about DataLoader workers
+warnings.filterwarnings(
+    "ignore",
+    message=r"The '(val_|train_|test_)?dataloader' does not have many workers",
+    category=UserWarning,
+)
+
+# Ignore checkpoint directory already exists notice
+warnings.filterwarnings(
+    "ignore",
+    message=r"Checkpoint directory .+ exists and is not empty",
+    category=UserWarning,
+)
+
+# Ignore small batch vs logging interval info
+warnings.filterwarnings(
+    "ignore",
+    message=r"The number of training batches \(\d+\) is smaller than the logging interval",
+    category=UserWarning,
+)
 
 from data import GenericVisionDataset, create_data_loaders
 from model import NNUE, GridFeatureSet, LossParams

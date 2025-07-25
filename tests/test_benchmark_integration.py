@@ -7,6 +7,7 @@ as it would be in practice, including command-line scripts and report generation
 
 import json
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -57,9 +58,6 @@ class TestBenchmarkScriptIntegration:
     def test_run_mcu_benchmarks_script_imports(self):
         """Test that the benchmark script can be imported without errors."""
         try:
-            import sys
-            from pathlib import Path
-
             # Add scripts directory to path
             script_path = Path(__file__).parent.parent / "scripts"
             sys.path.insert(0, str(script_path))
@@ -77,9 +75,6 @@ class TestBenchmarkScriptIntegration:
     def test_example_benchmark_script_imports(self):
         """Test that the example benchmark script can be imported."""
         try:
-            import sys
-            from pathlib import Path
-
             # Add root directory to path
             root_path = Path(__file__).parent.parent
             sys.path.insert(0, str(root_path))

@@ -31,14 +31,30 @@ fi
 #---------------------------------------------------------------------------#
 # Robust apt update (NVIDIA repo occasionally has sync issues)
 log "updating apt repositories"
-if ! apt-get update; then
-    log "apt-get update failed – removing NVIDIA repo entries and retrying"
-    # Delete NVIDIA-specific list files completely
-    find /etc/apt/sources.list.d -type f -iname "*nvidia*" -exec rm -f {} + || true
 
-    # Remove any NVIDIA lines in the main sources.list
-    sed -i '/nvidia/d' /etc/apt/sources.list || true
-    # Retry once more (ignore failure so script continues)
+# Proactive cleanup of problematic NVIDIA repositories before first attempt
+log "cleaning up NVIDIA repository sources that may cause conflicts"
+find /etc/apt/sources.list.d -type f -iname "*nvidia*" -delete || true
+find /etc/apt/sources.list.d -type f -iname "*cuda*" -delete || true
+sed -i '/nvidia/d' /etc/apt/sources.list || true
+sed -i '/cuda/d' /etc/apt/sources.list || true
+
+# Clear apt cache to ensure fresh repository data
+rm -rf /var/lib/apt/lists/* || true
+
+if ! apt-get update; then
+    log "apt-get update failed even after NVIDIA cleanup – performing additional cleanup"
+    
+    # More aggressive cleanup
+    find /etc/apt -name "*.list*" -exec grep -l "nvidia\|cuda" {} \; -delete || true
+    
+    # Remove any broken or incomplete package lists
+    rm -rf /var/lib/apt/lists/partial/* || true
+    
+    # Try to fix any broken packages
+    dpkg --configure -a || true
+    
+    # Final retry (ignore failure so script continues)
     apt-get update || true
 fi
 

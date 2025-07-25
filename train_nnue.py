@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -341,7 +342,8 @@ class NNUEWrapper(pl.LightningModule):
         # Compute loss without internal logging
         loss = self._compute_loss(adapted_batch, batch_idx)
         # Log using the wrapper's logging context
-        self.log("train_loss", loss)
+        if getattr(self, "_trainer", None) is not None:
+            self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -349,7 +351,8 @@ class NNUEWrapper(pl.LightningModule):
         # Compute loss without internal logging
         loss = self._compute_loss(adapted_batch, batch_idx)
         # Log using the wrapper's logging context
-        self.log("val_loss", loss)
+        if getattr(self, "_trainer", None) is not None:
+            self.log("val_loss", loss)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -357,7 +360,8 @@ class NNUEWrapper(pl.LightningModule):
         # Compute loss without internal logging
         loss = self._compute_loss(adapted_batch, batch_idx)
         # Log using the wrapper's logging context
-        self.log("test_loss", loss)
+        if getattr(self, "_trainer", None) is not None:
+            self.log("test_loss", loss)
         return loss
 
     def configure_optimizers(self):
@@ -390,7 +394,6 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="config/train_default.py",
         help="Path to the configuration file",
     )
 
@@ -614,15 +617,11 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Fatal error in training: {e}")
-        import traceback
-
         traceback.print_exc()
 
         # Stop RunPod instance on error if we're running on RunPod
         if os.getenv("RUNPOD_POD_ID"):
             try:
-                import runpod_service
-
                 runpod_service.stop_runpod()
             except ImportError:
                 pass  # runpod_service not available in this environment

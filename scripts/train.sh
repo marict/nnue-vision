@@ -1,6 +1,6 @@
 #!/bin/bash
 
-python train.py \
+python train_nnue.py \
  ../data/large_gensfen_multipvdiff_100_d9.binpack \
  ../data/large_gensfen_multipvdiff_100_d9.binpack \
  --gpus 1 \

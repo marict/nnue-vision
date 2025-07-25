@@ -8,13 +8,13 @@ Neural Network Efficiently Updatable (NNUE) adapted for computer vision tasks, s
 
 ```bash
 # Train with default configuration
-python train.py
+python train_nnue.py
 
 # Train with custom configuration  
-python train.py --config config/train_default.py
+python train_nnue.py --config config/train_default.py
 
 # Override specific parameters
-python train.py --config config/train_default.py --max_epochs 50 --batch_size 64
+python train_nnue.py --config config/train_default.py --max_epochs 50 --batch_size 64
 ```
 
 ### Cloud Training (RunPod)
@@ -52,7 +52,7 @@ The training script now includes comprehensive wandb logging for detailed experi
 export WANDB_API_KEY=your_api_key_here
 
 # Run training with wandb logging
-python train.py --project_name my_experiment --note "baseline_run"
+python train_nnue.py --project_name my_experiment --note "baseline_run"
 
 # Run multiple experiments for comparison
 python scripts/train_with_wandb.py
@@ -105,7 +105,7 @@ Dense(2) → Softmax
 ### Core Files
 - `model.py` - CNN model definition using PyTorch Lightning
 - `dataset.py` - Visual Wake Words dataset loader and preprocessing
-- `train.py` - Training script with wandb/tensorboard logging support
+- `train_nnue.py` - Training script with wandb/tensorboard logging support
 
 ### Scripts and Examples
 - `scripts/train_with_wandb.py` - Example script for running multiple wandb experiments

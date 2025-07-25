@@ -13,6 +13,23 @@ import time
 
 import psutil
 
+# Platform-specific imports
+try:
+    import curses
+except ImportError:
+    curses = None
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+    except ImportError:
+        ctypes = None
+else:
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
 EXITCODE_OK = 0
 EXITCODE_MISSING_DEPENDENCIES = 2
 EXITCODE_TRAINING_LIKELY_NOT_FINISHED = 3
@@ -318,7 +335,7 @@ def terminate_process_on_exit(process):
     Create a watchdog process that awaits the termination of this (calling) process
     and automatically terminates a given process (python's subprocess object) after.
 
-    Note: This is not used by the main training pipeline (train.py, train_etinynet.py)
+    Note: This is not used by the main training pipeline (train_nnue.py, train_etinynet.py)
     and only affects the legacy easy_train.py script.
     """
 
@@ -364,10 +381,9 @@ def schedule_exit(timeout_seconds, errcode):
             else:
                 # We cannot call .close directly because it tries to reset signals...
                 # But resetting signals won't work from a non-main thread...
-                import curses
-
-                TUI_SCREEN._screen.keypad(0)
-                curses.echo()
+                if curses:
+                    TUI_SCREEN._screen.keypad(0)
+                    curses.echo()
                 curses.nocbreak()
                 curses.endwin()
 
@@ -378,9 +394,7 @@ def schedule_exit(timeout_seconds, errcode):
     thread.start()
 
 
-if sys.platform == "win32":
-    import ctypes
-
+if sys.platform == "win32" and ctypes:
     WINAPI_CreateMutex = ctypes.windll.kernel32.CreateMutexA
     WINAPI_CreateMutex.argtypes = [
         ctypes.wintypes.LPCVOID,
@@ -457,8 +471,7 @@ if sys.platform == "win32":
             self.release()
             self.close()
 
-else:
-    import fcntl
+elif fcntl:
 
     class SystemWideMutex:
         def __init__(self, name):
@@ -877,7 +890,7 @@ class TrainingRun(Thread):
 
         self._running = True
 
-        cmd = [sys.executable, "train.py"] + self._get_stringified_args()
+        cmd = [sys.executable, "train_nnue.py"] + self._get_stringified_args()
         LOGGER.info(f"Running training with command: {cmd}")
         LOGGER.info(f"Also known as: {' '.join(cmd)}")
         LOGGER.info(f"Running in working directory: {self._nnue_pytorch_directory}")

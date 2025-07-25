@@ -353,8 +353,6 @@ class TestEtinyNetCppPyTorchRegression:
 
     def test_etinynet_serialization(self, test_model_and_data, device):
         """Test EtinyNet model serialization to .etiny format."""
-        import tempfile
-
         from serialize import serialize_etinynet_model
 
         model, _ = test_model_and_data
@@ -383,11 +381,6 @@ class TestEtinyNetCppPyTorchRegression:
 
     def test_pytorch_vs_cpp_etinynet_regression(self, test_model_and_data, device):
         """Test PyTorch vs C++ EtinyNet regression with serialized model."""
-        import subprocess
-        import tempfile
-
-        import numpy as np
-
         from serialize import serialize_etinynet_model
 
         model, test_images = test_model_and_data

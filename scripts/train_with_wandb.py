@@ -2,7 +2,7 @@
 """
 Example script for training the Visual Wake Words model with comprehensive wandb logging.
 
-This script demonstrates how to use the enhanced train.py with various configuration options
+This script demonstrates how to use the enhanced train_nnue.py with various configuration options
 for wandb experiment tracking.
 """
 
@@ -39,7 +39,7 @@ def run_training_experiment(
     # Build command
     cmd = [
         sys.executable,
-        "train.py",
+        "train_nnue.py",
         "--project_name",
         experiment_name,
         "--learning_rate",

@@ -9,6 +9,8 @@ C++ implementations, with proper quantization and optimization.
 
 import argparse
 import struct
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -739,12 +741,6 @@ def run_etinynet_cpp(model_path: Path, image: torch.Tensor) -> np.ndarray:  # ty
     Returns:
         NumPy array of logits from the C++ engine.
     """
-    import subprocess
-    import tempfile
-    from pathlib import Path
-
-    import numpy as np
-
     # Ensure image is on CPU and contiguous
     image_cpu = image.detach().to(torch.float32).cpu().contiguous()
     h, w = image_cpu.shape[1:]
