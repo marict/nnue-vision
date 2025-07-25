@@ -17,8 +17,70 @@ import wandb
 
 # DEFAULT_GPU_TYPE = "NVIDIA RTX 6000 Ada Generation"  # Available in WA network volume
 DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
-# TODO: Update this to your actual NNUE-Vision repository URL
-REPO_URL = "https://github.com/YOUR_USERNAME/nnue-vision.git"
+# Repository to clone inside the RunPod container
+# NOTE: This should point at the public or SSH URL of your fork.
+# Public HTTPS URL avoids SSH key issues inside ephemeral containers
+REPO_URL = "https://github.com/marict/nnue-vision.git"
+
+
+def print_training_help():
+    """Print comprehensive help for running different types of training jobs."""
+    help_text = """
+NNUE-Vision Training Guide
+==========================
+
+This tool launches GPU training jobs on RunPod for both NNUE and EtinyNet models.
+
+NNUE Training (Neural Network Efficiently Updatable):
+-----------------------------------------------------
+For chess/game engine evaluation networks:
+
+    # Basic NNUE training with default config
+    python runpod_service.py train --script train.py --config config/train_default.py
+
+    # NNUE with custom parameters
+    python runpod_service.py train --script train.py --config config/train_default.py --max_epochs 100 --batch_size 32
+
+    # Quick test run
+    python runpod_service.py train --script train.py --config config/train_test.py
+
+EtinyNet Training (Efficient Tiny Networks):
+--------------------------------------------
+For standard computer vision tasks (CIFAR-10/100):
+
+    # Basic EtinyNet training
+    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py
+
+    # EtinyNet with custom parameters
+    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py --max_epochs 200 --batch_size 64
+
+    # Quick test run
+    python runpod_service.py train --script train_etinynet.py --config config/train_test.py
+
+Common Options:
+--------------
+    --gpu-type "NVIDIA RTX 6000 Ada Generation"  # Choose GPU type
+    --keep-alive                                  # Keep pod running after training
+    --note "my experiment description"            # Add note to W&B run
+
+Example Commands:
+----------------
+    # NNUE training with specific GPU and note
+    python runpod_service.py train --script train.py --config config/train_default.py \\
+        --gpu-type "NVIDIA A100 80GB PCIe" --note "baseline NNUE experiment"
+
+    # EtinyNet training with custom settings
+    python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py \\
+        --max_epochs 200 --learning_rate 0.05 --note "reduced LR experiment"
+
+Notes:
+------
+- WANDB_API_KEY environment variable must be set
+- RUNPOD_API_KEY environment variable must be set
+- Training logs will automatically open in your browser via W&B
+- Pods auto-stop after training unless --keep-alive is used
+"""
+    print(help_text)
 
 
 class RunPodError(Exception):
@@ -91,8 +153,8 @@ def _build_training_command(
 def _create_docker_script(training_command: str) -> str:
     """Create the Docker startup script for the RunPod instance."""
     return (
-        f"apt-get update && apt-get install -y git && "
-        f"cd /workspace && "
+        "apt-get update && apt-get install -y git && "
+        "cd /workspace && "
         f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
         f"bash /workspace/repo/container_setup.sh {training_command}"
     )
@@ -294,15 +356,32 @@ def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="RunPod helper for NNUE-Vision training"
+        description="RunPod helper for NNUE-Vision training\n\nLaunches cloud GPU training jobs for both NNUE and EtinyNet models.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # NNUE training
+  python runpod_service.py train --script train.py --config config/train_default.py
+
+  # EtinyNet training  
+  python runpod_service.py train --script train_etinynet.py --config config/train_etinynet.py
+
+  # Show detailed help
+  python runpod_service.py help
+
+For complete usage guide, run: python runpod_service.py help
+        """,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # Help command
+    h = sub.add_parser("help", help="Show detailed training examples and usage guide")
 
     t = sub.add_parser("train", help="Start NNUE-Vision training pod")
     t.add_argument(
         "train_args",
         nargs="*",
-        help="Training arguments (e.g., --max_epochs 100 --batch_size 64)",
+        help="Training arguments (e.g., --config config/train_default.py --max_epochs 100 --batch_size 64)",
     )
     t.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name")
     t.add_argument("--api-key", help="RunPod API key")
@@ -315,11 +394,13 @@ if __name__ == "__main__":
     t.add_argument(
         "--script",
         default="train.py",
-        help="Training script to run",
+        help="Training script to run (train.py for NNUE, train_etinynet.py for EtinyNet)",
     )
 
     args = parser.parse_args()
-    if args.cmd == "train":
+    if args.cmd == "help":
+        print_training_help()
+    elif args.cmd == "train":
         train_args_str = " ".join(args.train_args) if args.train_args else ""
         start_cloud_training(
             train_args_str,
