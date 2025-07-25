@@ -6,6 +6,7 @@ import subprocess
 
 import requests
 import runpod
+from graphql.language.print_string import print_string
 
 import wandb
 
@@ -20,32 +21,19 @@ DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
 REPO_URL = "https://github.com/marict/nnue-vision.git"
 
 
-def _bash_c_quote(command: str) -> str:
-    """
-    Properly format a bash command for embedding in GraphQL strings.
+def _bash_c_quote(script: str) -> str:
+    """Return a *bash -c* command where *script* is properly escaped for GraphQL.
 
-    This function ensures that bash commands are safely escaped for use in
-    GraphQL mutations where they will be embedded as string literals.
-    """
-    # Use shlex.quote to properly escape for bash -c, then escape for GraphQL
-    quoted = shlex.quote(command)
-    return quoted
+    The RunPod library embeds docker_args directly into a GraphQL mutation using an f-string:
+    f'dockerArgs: "{docker_args}"'
 
-
-def _escape_for_graphql(value: str) -> str:
+    We use GraphQL's official print_string utility to handle all escape sequences.
     """
-    Escape a string value for safe embedding in GraphQL mutations.
-
-    The RunPod library embeds docker_args in GraphQL like: dockerArgs: "{value}"
-    We need to escape the value to prevent GraphQL syntax errors.
-    """
-    # Escape characters that would break GraphQL string literals
-    escaped = value.replace("\\", "\\\\")  # Escape backslashes first
-    escaped = escaped.replace('"', '\\"')  # Escape double quotes
-    escaped = escaped.replace("\n", "\\n")  # Escape newlines
-    escaped = escaped.replace("\r", "\\r")  # Escape carriage returns
-    escaped = escaped.replace("\t", "\\t")  # Escape tabs
-    return escaped
+    # For bash -c, the script needs to be a quoted argument
+    # Use shlex.quote to properly handle any quotes/escapes in the script
+    command = f"bash -c {shlex.quote(script)}"
+    # print_string returns the string wrapped in quotes and properly escaped
+    return print_string(command)[1:-1]  # Remove the outer quotes since RunPod adds them
 
 
 def print_training_help():
@@ -176,17 +164,36 @@ def _build_training_command(
 
 
 def _create_docker_script(training_command: str) -> str:
-    """Create the Docker startup script for the RunPod instance."""
-    # Robust first-layer setup: ignore apt update errors from NVIDIA mirrors
-    docker_bootstrap = (
-        "apt-get update || true && "
-        "apt-get install -y git || true && "
-        "cd /workspace && "
-        f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
-        f"bash /workspace/repo/container_setup.sh {training_command}"
-    )
+    """Create the Docker startup script for the RunPod instance.
 
-    return docker_bootstrap
+    We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
+    to avoid hash-mismatch errors when NVIDIA's mirror is out of sync.  Doing this
+    inline keeps the logic self-contained and ensures the container setup script will
+    run even if the base image ships with CUDA repos enabled.
+    """
+
+    # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
+    nvidia_repo_cleanup = "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list || true"
+
+    # 1) Standard system preparatory commands
+    base_commands = [
+        "echo '[RUNPOD] Starting container setup...'",
+        "echo '[RUNPOD] Cleaning up NVIDIA/CUDA APT sources...'",
+        nvidia_repo_cleanup,
+        "echo '[RUNPOD] Updating package lists and installing git...'",
+        # After cleanup, refresh package lists and install git
+        "apt-get update -y && apt-get install -y git",
+        "echo '[RUNPOD] Changing to workspace directory...'",
+        "cd /workspace",
+        "echo '[RUNPOD] Cloning or updating repository...'",
+        "( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )".format(
+            REPO_URL=REPO_URL
+        ),
+        "echo '[RUNPOD] Running container setup script...'",
+        f"bash /workspace/repo/container_setup.sh {training_command}",
+    ]
+
+    return " && ".join(base_commands)
 
 
 def start_cloud_training(
@@ -236,9 +243,14 @@ def start_cloud_training(
         train_args, keep_alive, note, wandb_run_id, script_name
     )
     docker_script = _create_docker_script(training_command)
-    # Create the full bash command and escape it for GraphQL safety
-    bash_command = f"bash -c {_bash_c_quote(docker_script)}"
-    final_docker_args = _escape_for_graphql(bash_command)
+    final_docker_args = _bash_c_quote(docker_script)
+
+    # Debug: print the docker command being sent
+    print("=== DEBUG: Docker script ===")
+    print(docker_script)
+    print("=== DEBUG: Final docker args ===")
+    print(final_docker_args)
+    print("=== END DEBUG ===")
 
     # ------------------------------------------------------------------ #
     # 2. Create RunPod instance
