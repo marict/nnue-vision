@@ -32,11 +32,12 @@ fi
 # Robust apt update (NVIDIA repo occasionally has sync issues)
 log "updating apt repositories"
 if ! apt-get update; then
-    log "apt-get update failed – disabling NVIDIA repo and retrying"
-    # Comment out any NVIDIA repository lines to avoid blocking the update
-    if ls /etc/apt/sources.list.d | grep -qi nvidia; then
-        sed -i 's|^deb .*nvidia.*|# &|' /etc/apt/sources.list.d/*.list || true
-    fi
+    log "apt-get update failed – removing NVIDIA repo entries and retrying"
+    # Delete NVIDIA-specific list files completely
+    find /etc/apt/sources.list.d -type f -iname "*nvidia*" -exec rm -f {} + || true
+
+    # Remove any NVIDIA lines in the main sources.list
+    sed -i '/nvidia/d' /etc/apt/sources.list || true
     # Retry once more (ignore failure so script continues)
     apt-get update || true
 fi

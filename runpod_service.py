@@ -149,12 +149,16 @@ def _build_training_command(
 
 def _create_docker_script(training_command: str) -> str:
     """Create the Docker startup script for the RunPod instance."""
-    return (
-        "apt-get update && apt-get install -y git && "
+    # Robust first-layer setup: ignore apt update errors from NVIDIA mirrors
+    docker_bootstrap = (
+        "apt-get update || true && "
+        "apt-get install -y git || true && "
         "cd /workspace && "
         f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo ) && "
         f"bash /workspace/repo/container_setup.sh {training_command}"
     )
+
+    return docker_bootstrap
 
 
 def start_cloud_training(
