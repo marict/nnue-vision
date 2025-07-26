@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 import torch
-from PIL import Image
 from torch.utils.data import DataLoader
 
 from data import (
@@ -14,7 +13,6 @@ from data import (
     get_dataset_stats,
     print_dataset_stats,
 )
-from tests.conftest import MockDataset
 
 
 class TestMockDataset:
