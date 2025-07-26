@@ -23,7 +23,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import WandbLogger
 
-import runpod_service
+import runpod_service_nnue
 import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
@@ -587,7 +587,7 @@ class BaseTrainer:
             # Stop RunPod instance if we're running on RunPod and keep-alive is not enabled
             if os.getenv("RUNPOD_POD_ID") and not getattr(config, "keep_alive", False):
                 try:
-                    runpod_service.stop_runpod()
+                    runpod_service_nnue.stop_runpod()
                 except ImportError:
                     pass  # runpod_service not available in this environment
 
@@ -611,7 +611,7 @@ class BaseTrainer:
             # Stop RunPod instance on error if we're running on RunPod
             if os.getenv("RUNPOD_POD_ID"):
                 try:
-                    runpod_service.stop_runpod()
+                    runpod_service_nnue.stop_runpod()
                 except ImportError:
                     pass  # runpod_service not available in this environment
 
