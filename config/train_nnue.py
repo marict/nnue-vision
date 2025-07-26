@@ -22,7 +22,7 @@ subset = 1.0  # Use full dataset
 
 # Data augmentation settings
 use_augmentation = True  # Enable strong data augmentation to prevent overfitting
-augmentation_strength = "medium"  # Options: "light", "medium", "heavy"
+augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
 
 # Training settings
 max_epochs = 50  # Longer than local dev, shorter than full runs

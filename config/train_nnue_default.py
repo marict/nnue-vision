@@ -24,6 +24,11 @@ max_epochs = 1  # Single epoch only
 patience = 1  # Minimal patience
 save_top_k = 1  # Save only best model
 
+# Data augmentation settings
+use_augmentation = True  # Enable strong data augmentation to prevent overfitting
+augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
+
+
 # System settings
 accelerator = "cpu"  # Force CPU for consistent timing
 devices = 1
