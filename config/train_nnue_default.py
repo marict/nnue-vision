@@ -11,7 +11,7 @@ name = "nnue_default"
 batch_size = 2  # Minimal batch size
 num_workers = 0  # No multiprocessing for speed
 input_size = (32, 32)  # Smaller images for speed
-num_classes = 2  # person/no person classification
+num_classes = 10  # CIFAR-10 classes for testing
 learning_rate = 1e-3
 subset = 0.001  # Use only 0.1% of data (just a few samples)
 

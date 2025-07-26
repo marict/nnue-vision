@@ -311,6 +311,19 @@ class BaseTrainer:
             default="logs",
             help="Directory for logs and checkpoints",
         )
+        parser.add_argument(
+            "--use_augmentation",
+            type=lambda x: x.lower() == "true",
+            default=None,
+            help="Enable data augmentation (true/false)",
+        )
+        parser.add_argument(
+            "--augmentation_strength",
+            type=str,
+            choices=["light", "medium", "heavy"],
+            default=None,
+            help="Data augmentation strength level",
+        )
 
         # Add model-specific arguments
         parser = self.adapter.get_model_specific_args(parser)
@@ -336,6 +349,10 @@ class BaseTrainer:
             config.learning_rate = args.learning_rate
         if args.note is not None:
             config.note = args.note
+        if args.use_augmentation is not None:
+            config.use_augmentation = args.use_augmentation
+        if args.augmentation_strength is not None:
+            config.augmentation_strength = args.augmentation_strength
 
         # Apply model-specific overrides
         self.adapter.apply_model_specific_overrides(config, args)

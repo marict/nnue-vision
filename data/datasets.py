@@ -1,4 +1,4 @@
-"""Generic dataset implementations for computer vision tasks."""
+"""Generic computer vision dataset support for multiple benchmarks."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import warnings
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
+import albumentations as A
 import numpy as np
 import torch
+from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
@@ -72,6 +74,8 @@ class GenericVisionDataset(Dataset):
         subset: float = 1.0,
         data_root: str = "./data/raw",
         binary_classification: Optional[dict] = None,
+        use_augmentation: bool = None,
+        augmentation_strength: str = "medium",
     ):
         """
         Initialize generic vision dataset.
@@ -84,6 +88,8 @@ class GenericVisionDataset(Dataset):
             subset: Fraction of dataset to use (0.0 to 1.0)
             data_root: Root directory for dataset storage
             binary_classification: Dict with 'positive_classes' list for binary tasks
+            use_augmentation: Enable data augmentation (None=auto-detect from split)
+            augmentation_strength: Augmentation intensity ('light', 'medium', 'heavy')
         """
         self.dataset_name = dataset_name
         self.split = split
@@ -92,6 +98,8 @@ class GenericVisionDataset(Dataset):
         self.subset = subset
         self.data_root = Path(data_root)
         self.binary_classification = binary_classification
+        self.use_augmentation = use_augmentation
+        self.augmentation_strength = augmentation_strength
 
         # Get dataset info
         self.dataset_info = get_dataset_info(dataset_name)
@@ -120,7 +128,7 @@ class GenericVisionDataset(Dataset):
             self.positive_class_indices = None
 
         # Image preprocessing pipeline
-        self.transform = self._build_transform()
+        self.transform = self._build_transform(self.use_augmentation)
 
         # Load dataset
         print(f"🔄 Loading {self.dataset_info['name']} dataset ({split} split)...")
@@ -131,26 +139,146 @@ class GenericVisionDataset(Dataset):
 
         print(f"✅ Loaded {len(self.samples)} samples from {self.dataset_info['name']}")
 
-    def _build_transform(self) -> transforms.Compose:
-        """Build image preprocessing pipeline."""
-        transform_list = []
+    def _build_transform(self, use_augmentation: bool = None) -> A.Compose:
+        """Build image preprocessing pipeline with comprehensive augmentation."""
+        if use_augmentation is None:
+            use_augmentation = self.split in ["train", "training"]
 
-        # Resize if needed
-        if self.target_size != self.dataset_info["input_size"]:
-            transform_list.append(transforms.Resize(self.target_size))
+        # Base transforms (no resize here - will be done at the end)
+        base_transforms = []
 
-        # Convert to tensor and normalize
-        transform_list.extend(
+        if use_augmentation:
+            # Different augmentation strengths
+            if self.augmentation_strength == "light":
+                augmentation_transforms = [
+                    A.HorizontalFlip(p=0.5),
+                    A.RandomBrightnessContrast(
+                        brightness_limit=0.1, contrast_limit=0.1, p=0.2
+                    ),
+                    A.CoarseDropout(
+                        num_holes_range=(1, 1),
+                        hole_height_range=(0.05, 0.05),
+                        hole_width_range=(0.05, 0.05),
+                        p=0.2,
+                    ),
+                ]
+            elif self.augmentation_strength == "heavy":
+                augmentation_transforms = [
+                    # Aggressive geometric augmentations
+                    A.HorizontalFlip(p=0.6),
+                    A.RandomRotate90(p=0.6),
+                    A.Rotate(limit=25, p=0.5),
+                    A.ShiftScaleRotate(
+                        shift_limit=0.15, scale_limit=0.15, rotate_limit=25, p=0.5
+                    ),
+                    # Strong brightness/contrast
+                    A.RandomBrightnessContrast(
+                        brightness_limit=0.3, contrast_limit=0.3, p=0.5
+                    ),
+                    A.HueSaturationValue(
+                        hue_shift_limit=15,
+                        sat_shift_limit=20,
+                        val_shift_limit=15,
+                        p=0.5,
+                    ),
+                    # More blur and noise
+                    A.OneOf(
+                        [
+                            A.Blur(blur_limit=5, p=1.0),
+                            A.GaussianBlur(blur_limit=5, p=1.0),
+                            A.MotionBlur(blur_limit=5, p=1.0),
+                        ],
+                        p=0.4,
+                    ),
+                    A.GaussNoise(std_range=(0.01, 0.1), p=0.4),
+                    # Aggressive cutout
+                    A.CoarseDropout(
+                        num_holes_range=(1, 2),
+                        hole_height_range=(0.1, 0.25),
+                        hole_width_range=(0.1, 0.25),
+                        p=0.5,
+                    ),
+                    # More advanced augmentations
+                    A.RandomShadow(p=0.2),
+                    A.RandomFog(p=0.2),
+                    A.GridDistortion(p=0.2),
+                    A.ElasticTransform(p=0.2),
+                    A.CLAHE(clip_limit=3.0, p=0.2),
+                    A.ColorJitter(p=0.3),
+                    A.Posterize(p=0.2),
+                    A.Equalize(p=0.2),
+                ]
+            else:  # medium (default)
+                augmentation_transforms = [
+                    # Geometric augmentations
+                    A.HorizontalFlip(p=0.5),
+                    A.RandomRotate90(p=0.5),
+                    A.Rotate(limit=15, p=0.3),
+                    A.ShiftScaleRotate(
+                        shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.3
+                    ),
+                    # Brightness/contrast augmentations
+                    A.RandomBrightnessContrast(
+                        brightness_limit=0.2, contrast_limit=0.2, p=0.3
+                    ),
+                    A.HueSaturationValue(
+                        hue_shift_limit=10,
+                        sat_shift_limit=15,
+                        val_shift_limit=10,
+                        p=0.3,
+                    ),
+                    # Blur and noise
+                    A.OneOf(
+                        [
+                            A.Blur(blur_limit=3, p=1.0),
+                            A.GaussianBlur(blur_limit=3, p=1.0),
+                            A.MotionBlur(blur_limit=3, p=1.0),
+                        ],
+                        p=0.2,
+                    ),
+                    A.GaussNoise(std_range=(0.01, 0.05), p=0.2),
+                    # Cutout augmentations
+                    A.CoarseDropout(
+                        num_holes_range=(1, 1),
+                        hole_height_range=(0.05, 0.15),  # As proportions of image
+                        hole_width_range=(0.05, 0.15),
+                        p=0.3,
+                    ),
+                    # Advanced augmentations
+                    A.RandomShadow(p=0.1),
+                    A.RandomFog(p=0.1),
+                    A.GridDistortion(p=0.1),
+                    A.ElasticTransform(p=0.1),
+                    # Color augmentations
+                    A.CLAHE(clip_limit=2.0, p=0.1),
+                    A.ColorJitter(p=0.2),
+                    A.Posterize(p=0.1),
+                    A.Equalize(p=0.1),
+                ]
+
+            transforms_list = base_transforms + augmentation_transforms
+        else:
+            # No augmentation for validation/test
+            transforms_list = base_transforms
+
+        # Add resize at the end to ensure final output size is always correct
+        # (this handles dimension swaps from rotations, etc.)
+        transforms_list.append(
+            A.Resize(height=self.target_size[0], width=self.target_size[1], p=1.0)
+        )
+
+        # Add normalization and tensor conversion
+        transforms_list.extend(
             [
-                transforms.ToTensor(),
-                transforms.Normalize(
+                A.Normalize(
                     mean=[0.485, 0.456, 0.406],  # ImageNet means
                     std=[0.229, 0.224, 0.225],  # ImageNet stds
                 ),
+                ToTensorV2(),
             ]
         )
 
-        return transforms.Compose(transform_list)
+        return A.Compose(transforms_list)
 
     def _load_dataset(self):
         """Load the specified dataset using torchvision."""
@@ -220,16 +348,36 @@ class GenericVisionDataset(Dataset):
 
         image, label = self.samples[idx]
 
-        # Apply transforms
+        # Convert PIL Image to numpy array for Albumentations
         if isinstance(image, Image.Image):
-            image_tensor = self.transform(image)
+            image_array = np.array(image)
+        elif isinstance(image, np.ndarray):
+            image_array = image
         else:
-            # Convert numpy array to PIL Image if needed
-            if isinstance(image, np.ndarray):
-                image = Image.fromarray(image)
-                image_tensor = self.transform(image)
+            # Fallback - create random image
+            image_array = np.random.randint(
+                0, 255, (*self.target_size, 3), dtype=np.uint8
+            )
+
+        # Apply transforms
+        try:
+            transformed = self.transform(image=image_array)
+            image_tensor = transformed["image"]
+        except Exception as e:
+            print(f"Warning: Transform failed for image {idx}: {e}")
+            # Fallback to basic preprocessing
+            if isinstance(image, Image.Image):
+                basic_transform = transforms.Compose(
+                    [
+                        transforms.Resize(self.target_size),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                        ),
+                    ]
+                )
+                image_tensor = basic_transform(image)
             else:
-                # Fallback
                 image_tensor = torch.randn(3, *self.target_size)
 
         return image_tensor, label

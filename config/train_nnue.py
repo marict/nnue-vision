@@ -20,6 +20,10 @@ num_classes = 10  # CIFAR-10 classes
 learning_rate = 3e-4  # Good starting LR for Adam
 subset = 1.0  # Use full dataset
 
+# Data augmentation settings
+use_augmentation = True  # Enable strong data augmentation to prevent overfitting
+augmentation_strength = "medium"  # Options: "light", "medium", "heavy"
+
 # Training settings
 max_epochs = 50  # Longer than local dev, shorter than full runs
 patience = 10  # Early-stopping patience

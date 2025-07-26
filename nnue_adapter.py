@@ -16,6 +16,7 @@ import wandb
 from data import create_data_loaders
 from model import NNUE, LossParams
 from training_framework import ModelAdapter
+from training_utils import generate_run_name
 
 
 def adapt_batch_for_nnue(batch, num_ls_buckets=8):
@@ -149,6 +150,10 @@ class NNUEAdapter(ModelAdapter):
         """Return the name of the model type."""
         return "NNUE"
 
+    def get_run_name(self, config: Any) -> str:
+        """Generate a run name for wandb using RunPod ID when available."""
+        return generate_run_name(config)
+
     def create_model(self, config: Any) -> pl.LightningModule:
         """Create and return the NNUE model instance."""
         # Set up loss parameters from config
@@ -182,6 +187,8 @@ class NNUEAdapter(ModelAdapter):
             target_size=getattr(config, "input_size", (96, 96)),
             subset=getattr(config, "subset", 1.0),
             binary_classification=getattr(config, "binary_classification", None),
+            use_augmentation=getattr(config, "use_augmentation", True),
+            augmentation_strength=getattr(config, "augmentation_strength", "medium"),
         )
 
     def get_callbacks(self, config: Any, log_dir: str) -> List[Callback]:

@@ -1,14 +1,13 @@
-"""Data loaders for generic computer vision datasets."""
+"""Data loader utilities for computer vision training."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch.utils.data import DataLoader
 
-from .datasets import AVAILABLE_DATASETS, GenericVisionDataset, get_dataset_info
+from .datasets import GenericVisionDataset, get_dataset_info
 
 
 def create_data_loaders(
@@ -20,6 +19,8 @@ def create_data_loaders(
     subset: float = 1.0,
     data_root: str = "./data/raw",
     binary_classification: Optional[dict] = None,
+    use_augmentation: bool = True,
+    augmentation_strength: str = "medium",
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create data loaders for computer vision datasets.
@@ -58,6 +59,8 @@ def create_data_loaders(
         subset=subset,
         data_root=data_root,
         binary_classification=binary_classification,
+        use_augmentation=use_augmentation,
+        augmentation_strength=augmentation_strength,
     )
 
     # For CIFAR datasets, validation and test use the same test split
@@ -70,6 +73,8 @@ def create_data_loaders(
         subset=subset,
         data_root=data_root,
         binary_classification=binary_classification,
+        use_augmentation=False,  # No augmentation for validation
+        augmentation_strength=augmentation_strength,
     )
 
     test_dataset = GenericVisionDataset(
@@ -80,6 +85,8 @@ def create_data_loaders(
         subset=subset,
         data_root=data_root,
         binary_classification=binary_classification,
+        use_augmentation=False,  # No augmentation for test
+        augmentation_strength=augmentation_strength,
     )
 
     # Create data loaders

@@ -14,7 +14,7 @@ from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from data import create_data_loaders
 from model import EtinyNet
 from training_framework import ModelAdapter
-from training_utils import early_log
+from training_utils import early_log, generate_run_name
 
 
 class EtinyNetAdapter(ModelAdapter):
@@ -64,6 +64,8 @@ class EtinyNetAdapter(ModelAdapter):
                 if getattr(config, "subset", 1.0) >= 1.0
                 else int(50000 * getattr(config, "subset", 1.0))
             ),
+            use_augmentation=getattr(config, "use_augmentation", True),
+            augmentation_strength=getattr(config, "augmentation_strength", "medium"),
         )
 
     def get_callbacks(self, config: Any, log_dir: str) -> List[Callback]:
@@ -169,14 +171,8 @@ class EtinyNetAdapter(ModelAdapter):
             config.dataset_name = "cifar10"
 
     def get_run_name(self, config: Any) -> str:
-        """Generate a run name for wandb."""
-        variant = getattr(config, "etinynet_variant", "0.75")
-        dataset_name = getattr(config, "dataset_name", "cifar10")
-
-        run_name = f"etinynet-{variant}_{dataset_name}"
-        if hasattr(config, "note") and config.note:
-            run_name += f"_{config.note}"
-        return run_name
+        """Generate a run name for wandb using RunPod ID when available."""
+        return generate_run_name(config)
 
     def log_sample_predictions(
         self,
