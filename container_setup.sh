@@ -65,10 +65,7 @@ apt-get install -y --no-install-recommends tree htop || true
 # python deps
 #---------------------------------------------------------------------------#
 log "installing python deps"
-pip install -q -r requirements.txt
-
-# Install additional RunPod dependencies
-pip install -q -r requirements-runpod.txt
+pip install -q -r requirements-dev.txt
 
 #---------------------------------------------------------------------------#
 # debugging env vars

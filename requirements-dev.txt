@@ -1,3 +1,26 @@
-graphql-core>=3.2.0
-pytest
-pytest-timeout 
+# Development and production dependencies for NNUE-Vision
+
+# Core production dependencies
+matplotlib
+numba
+requests
+pytorch-lightning
+pillow
+wandb
+seaborn
+ranger21
+albumentations
+opencv-python-headless
+
+# RunPod cloud training dependencies
+runpod
+graphql-core
+
+# Development tools
+# Code formatting and linting
+black
+isort
+flake8
+
+# Type checking
+mypy

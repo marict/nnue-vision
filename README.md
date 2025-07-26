@@ -18,7 +18,7 @@ This project implements NNUE (Neural Network Efficiently Updatable) architecture
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Train NNUE model on CIFAR-10
 python train.py nnue --config config/train_nnue_default.py
@@ -33,8 +33,8 @@ python train.py nnue --config config/train_nnue_default.py --max_epochs 50 --bat
 ### Cloud Training (RunPod)
 
 ```bash
-# Install cloud dependencies
-pip install -r requirements-runpod.txt
+# Install dependencies (includes RunPod support)
+pip install -r requirements-dev.txt
 
 # Set environment variables
 export WANDB_API_KEY=your_wandb_key
