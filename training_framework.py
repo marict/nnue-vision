@@ -426,6 +426,9 @@ class BaseTrainer:
         early_log("📝 Git repository information:")
         log_git_commit_info()
 
+        # Initialize variables for cleanup
+        emergency_wandb_logger = None
+
         try:
             # Parse arguments and load config
             parser = self.setup_argument_parser()
@@ -449,12 +452,42 @@ class BaseTrainer:
             # Set random seed for reproducibility
             pl.seed_everything(getattr(config, "seed", 42))
 
-            # Create model and data loaders
-            model = self.adapter.create_model(config)
-            early_log("📚 Creating data loaders...")
-            train_loader, val_loader, test_loader = self.adapter.create_data_loaders(
-                config
-            )
+            # Set up emergency W&B logger early for crash reporting
+            try:
+                emergency_wandb_logger = self.setup_emergency_wandb_logger(config, args)
+                early_log("🚨 Emergency W&B logger ready for crash reporting")
+            except Exception as e:
+                early_log(f"⚠️  Failed to setup emergency W&B logger: {e}")
+                emergency_wandb_logger = None
+
+            # Create model and data loaders (these are crash-prone areas)
+            try:
+                early_log("🏗️  Creating model...")
+                model = self.adapter.create_model(config)
+                early_log("✅ Model created successfully")
+            except Exception as e:
+                error_msg = f"Fatal error during model creation: {str(e)}"
+                early_log(f"❌ {error_msg}")
+                if emergency_wandb_logger:
+                    self._log_error_to_wandb(
+                        emergency_wandb_logger, "model_creation", error_msg, e
+                    )
+                raise
+
+            try:
+                early_log("📚 Creating data loaders...")
+                train_loader, val_loader, test_loader = (
+                    self.adapter.create_data_loaders(config)
+                )
+                early_log("✅ Data loaders created successfully")
+            except Exception as e:
+                error_msg = f"Fatal error during data loader creation: {str(e)}"
+                early_log(f"❌ {error_msg}")
+                if emergency_wandb_logger:
+                    self._log_error_to_wandb(
+                        emergency_wandb_logger, "data_loading", error_msg, e
+                    )
+                raise
 
             # Set up logging directory
             log_dir = config.log_dir
@@ -561,8 +594,19 @@ class BaseTrainer:
             return 0
 
         except Exception as e:
-            print(f"Fatal error in training: {e}")
+            error_msg = f"Fatal error in training: {str(e)}"
+            print(f"❌ {error_msg}")
             traceback.print_exc()
+
+            # Try to log error to emergency W&B if available
+            if emergency_wandb_logger:
+                try:
+                    self._log_error_to_wandb(
+                        emergency_wandb_logger, "training_failure", error_msg, e
+                    )
+                    early_log("🚨 Error logged to emergency W&B")
+                except Exception as wandb_error:
+                    early_log(f"⚠️  Failed to log error to W&B: {wandb_error}")
 
             # Stop RunPod instance on error if we're running on RunPod
             if os.getenv("RUNPOD_POD_ID"):
@@ -584,3 +628,121 @@ class BaseTrainer:
         print(f"Batch size: {getattr(config, 'batch_size', 32)}")
         print(f"Wandb project: {getattr(config, 'project_name', 'training')}")
         print(f"Wandb run URL: {wandb_logger.experiment.url}")
+
+    def setup_emergency_wandb_logger(
+        self, config: Any, args: argparse.Namespace
+    ) -> WandbLogger:
+        """Set up a minimal W&B logger for early crash reporting."""
+        from pytorch_lightning.loggers import WandbLogger
+
+        import wandb
+
+        # Generate a simple run name for emergency logging
+        run_name = (
+            f"emergency_{self.adapter.get_model_type_name().lower()}_{config.name}"
+        )
+
+        # Minimal config for emergency logging
+        emergency_config = {
+            "emergency_run": True,
+            "model_type": self.adapter.get_model_type_name(),
+            "config_name": config.name,
+            "crash_detection": True,
+        }
+
+        # Set up emergency W&B logger
+        wandb_kwargs = {
+            "project": getattr(
+                config,
+                "project_name",
+                f"{self.adapter.get_model_type_name().lower()}_emergency",
+            ),
+            "name": run_name,
+            "config": emergency_config,
+            "save_dir": getattr(config, "log_dir", "logs"),
+            "log_model": False,  # Don't log models for emergency runs
+            "tags": [
+                "emergency",
+                "crash_detection",
+                self.adapter.get_model_type_name().lower(),
+            ],
+        }
+
+        return WandbLogger(**wandb_kwargs)
+
+    def _log_error_to_wandb(
+        self,
+        wandb_logger: WandbLogger,
+        error_stage: str,
+        error_msg: str,
+        exception: Exception,
+    ) -> None:
+        """Log error information to W&B for debugging."""
+        import os
+        import sys
+        import traceback
+
+        import wandb
+
+        # Get full traceback
+        tb_str = traceback.format_exc()
+
+        # Collect system information
+        system_info = {
+            "python_version": sys.version,
+            "torch_available": False,
+            "cuda_available": False,
+            "pwd": os.getcwd(),
+            "env_vars": {
+                k: v
+                for k, v in os.environ.items()
+                if "WANDB" in k or "CUDA" in k or "TORCH" in k
+            },
+        }
+
+        try:
+            import torch
+
+            system_info["torch_available"] = True
+            system_info["torch_version"] = torch.__version__
+            system_info["cuda_available"] = torch.cuda.is_available()
+            if torch.cuda.is_available():
+                system_info["cuda_device_count"] = torch.cuda.device_count()
+                system_info["cuda_device_name"] = torch.cuda.get_device_name(0)
+        except ImportError:
+            pass
+
+        # Log error details to W&B
+        error_log = {
+            f"error/{error_stage}/message": error_msg,
+            f"error/{error_stage}/type": type(exception).__name__,
+            f"error/{error_stage}/traceback": tb_str,
+            f"error/{error_stage}/timestamp": time.time(),
+            "system/python_version": system_info["python_version"],
+            "system/torch_available": system_info["torch_available"],
+            "system/cuda_available": system_info["cuda_available"],
+            "system/working_directory": system_info["pwd"],
+        }
+
+        if system_info["torch_available"]:
+            error_log["system/torch_version"] = system_info["torch_version"]
+            if system_info["cuda_available"]:
+                error_log["system/cuda_device_count"] = system_info["cuda_device_count"]
+                error_log["system/cuda_device_name"] = system_info["cuda_device_name"]
+
+        # Log to W&B
+        wandb_logger.experiment.log(error_log)
+
+        # Also log as a summary for easy access
+        wandb_logger.experiment.summary[f"final_error_{error_stage}"] = error_msg
+        wandb_logger.experiment.summary["final_status"] = "FAILED"
+        wandb_logger.experiment.summary["error_stage"] = error_stage
+
+        # Mark run as failed
+        wandb_logger.experiment.mark_preempting()
+
+        # Try to finish the run gracefully
+        try:
+            wandb.finish(exit_code=1)
+        except:
+            pass  # If finish fails, don't crash the crash handler
