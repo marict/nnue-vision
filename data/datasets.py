@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import albumentations as A
 import numpy as np
@@ -12,7 +11,7 @@ import torch
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import datasets, transforms
+from torchvision import datasets
 
 # Available datasets
 AVAILABLE_DATASETS = {
@@ -364,21 +363,8 @@ class GenericVisionDataset(Dataset):
             transformed = self.transform(image=image_array)
             image_tensor = transformed["image"]
         except Exception as e:
-            print(f"Warning: Transform failed for image {idx}: {e}")
-            # Fallback to basic preprocessing
-            if isinstance(image, Image.Image):
-                basic_transform = transforms.Compose(
-                    [
-                        transforms.Resize(self.target_size),
-                        transforms.ToTensor(),
-                        transforms.Normalize(
-                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        ),
-                    ]
-                )
-                image_tensor = basic_transform(image)
-            else:
-                image_tensor = torch.randn(3, *self.target_size)
+            print(f"Error: Transform failed for image {idx}: {e}")
+            raise
 
         return image_tensor, label
 
