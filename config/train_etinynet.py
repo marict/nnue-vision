@@ -20,6 +20,10 @@ num_classes = 10  # Will be overridden based on dataset choice
 learning_rate = 0.1  # SGD with momentum works best for EtinyNet
 subset = 1.0  # Use full dataset
 
+# Data augmentation settings
+use_augmentation = True  # Enable strong data augmentation to prevent overfitting
+augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
+
 # Training settings
 max_epochs = 200  # EtinyNet needs more epochs than NNUE
 patience = 20  # Higher patience for SGD convergence
