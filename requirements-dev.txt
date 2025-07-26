@@ -1,6 +1,7 @@
 # Development and production dependencies for NNUE-Vision
 
 # Core production dependencies
+numpy<2  # Pin to 1.x for PyTorch Lightning compatibility
 matplotlib
 numba
 requests
