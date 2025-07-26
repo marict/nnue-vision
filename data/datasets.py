@@ -13,6 +13,18 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import datasets
 
+# Verify that numpy works properly with PyTorch (fail fast if not)
+try:
+    test_array = np.array([1, 2, 3])
+    test_tensor = torch.from_numpy(test_array)
+    assert test_tensor.numel() == 3, "torch.from_numpy() test failed"
+except Exception as e:
+    raise RuntimeError(
+        f"NumPy integration with PyTorch is broken: {e}. "
+        f"This will cause albumentations ToTensorV2() to fail. "
+        f"Please ensure numpy is properly installed and compatible with PyTorch."
+    )
+
 # Available datasets
 AVAILABLE_DATASETS = {
     "cifar10": {
