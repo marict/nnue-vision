@@ -85,9 +85,15 @@ class TestBaseTrainerMethods:
         """Test wandb logger setup."""
         # Mock WandbLogger
         mock_logger = MagicMock()
-        monkeypatch.setattr(
-            "training_framework.WandbLogger", lambda **kwargs: mock_logger
-        )
+
+        # Capture the kwargs passed to WandbLogger
+        captured_kwargs = {}
+
+        def mock_wandb_logger(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_logger
+
+        monkeypatch.setattr("training_framework.WandbLogger", mock_wandb_logger)
 
         adapter = NNUEAdapter()
         trainer = BaseTrainer(adapter)
@@ -105,8 +111,22 @@ class TestBaseTrainerMethods:
             name="test_model",
         )
 
+        # Test 1: Without wandb_run_id, should set a name
         logger = trainer.setup_wandb_logger(config)
         assert logger == mock_logger
+        assert "name" in captured_kwargs
+        assert captured_kwargs["name"] is not None
+
+        # Reset captured kwargs
+        captured_kwargs.clear()
+
+        # Test 2: With wandb_run_id, should NOT set a name (to preserve existing run name)
+        logger = trainer.setup_wandb_logger(config, wandb_run_id="test_run_id")
+        assert logger == mock_logger
+        assert "name" not in captured_kwargs  # Should not override existing run name
+        assert "id" in captured_kwargs
+        assert captured_kwargs["id"] == "test_run_id"
+        assert captured_kwargs["resume"] == "must"
 
     def test_setup_trainer(self):
         """Test PyTorch Lightning trainer setup."""

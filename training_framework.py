@@ -398,7 +398,6 @@ class BaseTrainer:
         self, config: Any, wandb_run_id: Optional[str] = None
     ) -> WandbLogger:
         """Set up wandb logger with comprehensive configuration."""
-        run_name = self.adapter.get_run_name(config)
         wandb_config = self.adapter.setup_wandb_config(config)
 
         # Handle W&B run resumption if run ID is provided
@@ -408,7 +407,6 @@ class BaseTrainer:
                 "project_name",
                 f"{self.adapter.get_model_type_name().lower()}_training",
             ),
-            "name": run_name,
             "config": wandb_config,
             "save_dir": config.log_dir,
             "log_model": True,
@@ -418,6 +416,11 @@ class BaseTrainer:
             early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
             wandb_kwargs["id"] = wandb_run_id
             wandb_kwargs["resume"] = "must"
+            # Don't set a new name when resuming - keep the existing run name
+        else:
+            # Only set a name for new runs
+            run_name = self.adapter.get_run_name(config)
+            wandb_kwargs["name"] = run_name
 
         return WandbLogger(**wandb_kwargs)
 
