@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import pytorch_lightning as pl
-import ranger21
 import torch
 from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
@@ -615,7 +614,7 @@ class EtinyNet(pl.LightningModule):
         return self.validation_step(batch, batch_idx)
 
     def configure_optimizers(self):
-        """Configure optimizers and schedulers."""
+        """Configure optimizers and schedulers for EtinyNet."""
         optimizer = torch.optim.SGD(
             self.parameters(), lr=self.lr, momentum=0.9, weight_decay=1e-4
         )
@@ -1235,45 +1234,41 @@ class NNUE(pl.LightningModule):
     def configure_optimizers(self):
         LR = self.lr
 
-        # Try to use ranger21 if available, otherwise fall back to Adam
-        try:
-            train_params = [
-                {"params": [self.conv.weight], "lr": LR},
-                {"params": [self.conv.bias], "lr": LR},
-                {"params": get_parameters([self.input]), "lr": LR, "gc_dim": 0},
-                {"params": [self.layer_stacks.l1_fact.weight], "lr": LR},
-                {"params": [self.layer_stacks.l1_fact.bias], "lr": LR},
-                {"params": [self.layer_stacks.l1.weight], "lr": LR},
-                {"params": [self.layer_stacks.l1.bias], "lr": LR},
-                {"params": [self.layer_stacks.l2.weight], "lr": LR},
-                {"params": [self.layer_stacks.l2.bias], "lr": LR},
-                {"params": [self.layer_stacks.output.weight], "lr": LR},
-                {"params": [self.layer_stacks.output.bias], "lr": LR},
-            ]
+        # Separate parameters into weight decay and no weight decay groups
+        # Apply weight decay only to weights of conv/linear layers, not biases
+        weight_decay_params = []
+        no_weight_decay_params = []
 
-            optimizer = ranger21.Ranger21(
-                train_params,
-                lr=1.0,
-                betas=(0.9, 0.999),
-                eps=1.0e-7,
-                using_gc=False,
-                using_normgc=False,
-                weight_decay=0.0,
-                num_batches_per_epoch=self.num_batches_per_epoch,
-                num_epochs=self.max_epoch,
-                warmdown_active=False,
-                use_warmup=False,
-                use_adaptive_gradient_clipping=False,
-                softplus=False,
-                pnm_momentum_factor=0.0,
-            )
-        except ImportError:
-            # Fallback to Adam if ranger21 is not available
-            optimizer = torch.optim.Adam(self.parameters(), lr=LR)
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                # Apply weight decay to conv and linear layer weights, but not biases
+                if "weight" in name and (
+                    "conv" in name
+                    or "linear" in name
+                    or "fc" in name
+                    or "l1_fact" in name
+                    or "l1." in name
+                    or "l2." in name
+                    or "output." in name
+                ):
+                    weight_decay_params.append(param)
+                else:
+                    no_weight_decay_params.append(param)
 
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=1, gamma=self.gamma
+        # Set up parameter groups with different weight decay
+        param_groups = [
+            {"params": weight_decay_params, "weight_decay": 5e-4},
+            {"params": no_weight_decay_params, "weight_decay": 0.0},
+        ]
+
+        # Use Adam with momentum 0.9 (beta1=0.9, beta2=0.999)
+        optimizer = torch.optim.Adam(param_groups, lr=LR, betas=(0.9, 0.999), eps=1e-8)
+
+        # Use cosine annealing: start at max LR, anneal to 0 at end of training
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=self.max_epoch, eta_min=0.0  # Anneal to near zero
         )
+
         return [optimizer], [scheduler]
 
     def get_quantized_model_data(self):

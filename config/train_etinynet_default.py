@@ -15,7 +15,7 @@ asq_bits = 4
 # Dataset and model settings
 batch_size = 2  # Minimal batch size
 num_workers = 0  # No multiprocessing for speed
-input_size = 32  # CIFAR image size
+input_size = (32, 32)  # CIFAR image size
 num_classes = 10
 learning_rate = 1e-3
 subset = 0.001  # Use only 0.1% of data (just a few samples)

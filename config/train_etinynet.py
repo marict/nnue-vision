@@ -13,21 +13,21 @@ use_asq = False  # Disable ASQ for initial training
 asq_bits = 4  # ASQ bits if enabled
 
 # Dataset and model settings
-batch_size = 64  # Good balance for EtinyNet
-num_workers = 4  # Parallel data loading
-input_size = 32  # CIFAR image size (integer, not tuple)
+batch_size = 1536
+num_workers = 8  # Parallel data loading
+input_size = (32, 32)  # CIFAR image size
 num_classes = 10  # Will be overridden based on dataset choice
-learning_rate = 0.1  # SGD with momentum works best for EtinyNet
+learning_rate = 0.1 * (1536 / 64)  # SGD with momentum works best for EtinyNet
 subset = 1.0  # Use full dataset
 
 # Data augmentation settings
-use_augmentation = True  # Enable strong data augmentation to prevent overfitting
+use_augmentation = True
 augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
 
 # Training settings
-max_epochs = 200  # EtinyNet needs more epochs than NNUE
-patience = 20  # Higher patience for SGD convergence
-save_top_k = 3  # Save more models for analysis
+max_epochs = 800
+patience = 99999  # Never stop
+save_top_k = 1  # Save only best model
 
 # System settings
 accelerator = "auto"  # Auto-detect GPU/CPU

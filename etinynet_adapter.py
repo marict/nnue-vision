@@ -37,10 +37,18 @@ class EtinyNetAdapter(ModelAdapter):
         else:
             raise ValueError(f"Unsupported dataset: {dataset_name}")
 
+        # Convert input_size from tuple to integer (EtinyNet expects square images)
+        input_size_tuple = getattr(config, "input_size", (32, 32))
+        input_size = (
+            input_size_tuple[0]
+            if isinstance(input_size_tuple, tuple)
+            else input_size_tuple
+        )
+
         return EtinyNet(
             variant=variant,
             num_classes=num_classes,
-            input_size=32,  # CIFAR datasets are 32x32
+            input_size=input_size,
             use_asq=getattr(config, "use_asq", False),
             asq_bits=getattr(config, "asq_bits", 4),
             lr=getattr(config, "learning_rate", 0.1),
@@ -59,6 +67,7 @@ class EtinyNetAdapter(ModelAdapter):
             dataset_name=dataset_name,
             batch_size=getattr(config, "batch_size", 64),
             num_workers=getattr(config, "num_workers", 4),
+            target_size=getattr(config, "input_size", (32, 32)),
             max_samples_per_split=(
                 None
                 if getattr(config, "subset", 1.0) >= 1.0

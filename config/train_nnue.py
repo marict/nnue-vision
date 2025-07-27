@@ -13,21 +13,21 @@ num_ls_buckets = 8  # Standard bucket count
 visual_threshold = 0.0
 
 # Dataset and model settings
-batch_size = 1536  # GPU-friendly
+batch_size = 1024  # GPU-friendly
 num_workers = 8  # Reasonable parallelism
 input_size = (32, 32)  # Native CIFAR-10 resolution (no upsampling needed)
 num_classes = 10  # CIFAR-10 classes
-learning_rate = 3e-4 * (1536 / 64)
+learning_rate = 0.5  # Initial LR for cosine annealing (was 3e-4 * (1024 / 64))
 subset = 1.0  # Use full dataset
 
 # Data augmentation settings
-use_augmentation = True  # Enable strong data augmentation to prevent overfitting
+use_augmentation = True
 augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
 
 # Training settings
-max_epochs = 500
-patience = 10  # Early-stopping patience
-save_top_k = 3  # Keep best checkpoints
+max_epochs = 800
+patience = 99999
+save_top_k = 1  # Save only best model
 
 # System settings
 accelerator = "auto"
