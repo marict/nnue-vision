@@ -175,7 +175,6 @@ def _extract_project_name(train_args: str) -> str:
 
 def _build_training_command(
     train_args: str,
-    keep_alive: bool,
     note: str | None,
     wandb_run_id: str | None,
     script_name: str = "train.py",
@@ -183,8 +182,8 @@ def _build_training_command(
     """Build the complete training command with all flags."""
     cmd = f"{script_name} {train_args}"
 
-    if keep_alive:
-        cmd += " --keep-alive"
+    # NOTE: --keep-alive is handled by container_setup.sh, not the training script
+    # The keep_alive flag is passed separately to _create_docker_script
 
     if note:
         cmd += f" --note={note}"
@@ -195,7 +194,7 @@ def _build_training_command(
     return cmd
 
 
-def _create_docker_script(training_command: str) -> str:
+def _create_docker_script(training_command: str, keep_alive: bool = False) -> str:
     """Create the Docker startup script for the RunPod instance.
 
     We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
@@ -222,7 +221,7 @@ def _create_docker_script(training_command: str) -> str:
             REPO_URL=REPO_URL
         ),
         "echo '[RUNPOD] Running container setup script...'",
-        f"bash /workspace/repo/container_setup.sh {training_command}",
+        f"bash /workspace/repo/container_setup.sh {'--keep-alive ' if keep_alive else ''}{training_command}",
     ]
 
     return " && ".join(base_commands)
@@ -277,7 +276,7 @@ def start_cloud_training(
     training_command = _build_training_command(
         train_args, keep_alive, note, wandb_run_id, script_name
     )
-    docker_script = _create_docker_script(training_command)
+    docker_script = _create_docker_script(training_command, keep_alive)
     final_docker_args = _bash_c_quote(docker_script)
 
     # Debug: print the docker command being sent
