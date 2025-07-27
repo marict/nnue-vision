@@ -220,6 +220,7 @@ class NNUEAdapter(ModelAdapter):
             num_ls_buckets=getattr(config, "num_ls_buckets", 8),
             visual_threshold=getattr(config, "visual_threshold", 0.0),
             num_classes=getattr(config, "num_classes", 1),
+            weight_decay=getattr(config, "weight_decay", 5e-4),
         )
 
         # Wrap NNUE model to handle data format adaptation

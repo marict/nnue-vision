@@ -873,6 +873,7 @@ class NNUE(pl.LightningModule):
         loss_params=LossParams(),
         visual_threshold=0.0,
         num_classes=1,
+        weight_decay=5e-4,
     ):
         super(NNUE, self).__init__()
 
@@ -888,6 +889,7 @@ class NNUE(pl.LightningModule):
         self.num_ls_buckets = num_ls_buckets
         self.visual_threshold = visual_threshold
         self.num_classes = num_classes
+        self.weight_decay = weight_decay
 
         # Calculate conv output channels based on feature set
         # For grid-based features, we need enough channels to cover all features per square
@@ -1259,7 +1261,7 @@ class NNUE(pl.LightningModule):
 
         # Set up parameter groups with different weight decay
         param_groups = [
-            {"params": weight_decay_params, "weight_decay": 5e-4},
+            {"params": weight_decay_params, "weight_decay": self.weight_decay},
             {"params": no_weight_decay_params, "weight_decay": 0.0},
         ]
 

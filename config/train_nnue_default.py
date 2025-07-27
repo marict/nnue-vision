@@ -13,6 +13,7 @@ num_workers = 0  # No multiprocessing for speed
 input_size = (32, 32)  # Smaller images for speed
 num_classes = 10  # CIFAR-10 classes for testing
 learning_rate = 1e-3
+weight_decay = 5e-4  # L2 regularization strength
 subset = 0.001  # Use only 0.1% of data (just a few samples)
 
 # NNUE-specific minimal settings
