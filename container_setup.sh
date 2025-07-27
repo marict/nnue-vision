@@ -8,6 +8,12 @@ mountpoint -q /runpod-volume || echo "/runpod-volume not mounted"
 set -euo pipefail
 exec 2>&1                     # merge stderr into stdout
 
+# Add more verbose logging
+log "Container started - checking environment"
+log "Python version: $(python --version)"
+log "Pip version: $(pip --version)"
+log "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'torch not available yet')"
+
 start_time=$(date +%s)
 
 log()   { printf '[%6ss] %s\n'  "$(( $(date +%s) - start_time ))" "$*"; }
@@ -65,7 +71,15 @@ apt-get install -y --no-install-recommends tree htop || true
 # python deps
 #---------------------------------------------------------------------------#
 log "installing python deps"
-pip install -q -r requirements-dev.txt
+if ! pip install -q -r requirements-dev.txt; then
+    log "ERROR: pip install failed - attempting pip upgrade and retry"
+    pip install --upgrade pip
+    if ! pip install -r requirements-dev.txt; then
+        log "ERROR: pip install failed even after upgrade"
+        exit 1
+    fi
+fi
+log "python dependencies installed successfully"
 
 #---------------------------------------------------------------------------#
 # debugging env vars
@@ -113,6 +127,13 @@ if [[ "${filtered_args[*]}" != *"--log_dir"* ]]; then
     filtered_args+=("--log_dir=$log_dir")
 fi
 
+# Ensure WANDB_API_KEY is set before training
+if [[ -z "$WANDB_API_KEY" ]]; then
+    log "ERROR: WANDB_API_KEY environment variable is not set"
+    exit 1
+fi
+
+log "starting python training with args: ${filtered_args[*]}"
 python -u "${filtered_args[@]}" 2>&1 | tee "$log_file"
 
 log "training completed in $(( $(date +%s)-start_time ))s"
