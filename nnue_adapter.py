@@ -299,72 +299,9 @@ class NNUEAdapter(ModelAdapter):
         test_loader: torch.utils.data.DataLoader,
         device: torch.device,
     ) -> None:
-        """Log sample predictions to wandb."""
-        model.eval()
-        num_samples = 8
-
-        # Get a batch of test data
-        test_batch = next(iter(test_loader))
-        images, labels = test_batch
-        images = images[:num_samples].to(device)
-        labels = labels[:num_samples]
-
-        with torch.no_grad():
-            # Generate layer stack indices for NNUE (random bucket selection)
-            batch_size = images.shape[0]
-            # Get number of buckets from the model
-            num_buckets = getattr(model, "num_ls_buckets", 8)
-            layer_stack_indices = torch.randint(
-                0, num_buckets, (batch_size,), device=device
-            )
-
-            logits = model(images, layer_stack_indices)
-            probs = torch.softmax(logits, dim=1)
-            preds = torch.argmax(logits, dim=1)
-
-        # Create wandb images with predictions
-        # Determine number of classes from the data
-        num_classes = logits.shape[1]
-        if num_classes == 2:
-            class_names = ["No Person", "Person"]
-        else:
-            # For other datasets, use generic class names
-            class_names = [f"Class {i}" for i in range(num_classes)]
-
-        wandb_images = []
-
-        for i in range(len(images)):
-            img = images[i].cpu()
-            true_label = labels[i].item()
-            pred_label = preds[i].item()
-            confidence = probs[i][pred_label].item()
-
-            # Ensure labels are within bounds
-            true_label_name = (
-                class_names[true_label]
-                if true_label < len(class_names)
-                else f"Unknown({true_label})"
-            )
-            pred_label_name = (
-                class_names[pred_label]
-                if pred_label < len(class_names)
-                else f"Unknown({pred_label})"
-            )
-
-            # Denormalize image for proper visualization
-            # ImageNet normalization parameters used in data pipeline
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-            denorm_img = torch.clamp(img * std + mean, 0, 1)
-
-            # Convert tensor to wandb image format
-            wandb_img = wandb.Image(
-                denorm_img,
-                caption=f"True: {true_label_name}, Pred: {pred_label_name} ({confidence:.3f})",
-            )
-            wandb_images.append(wandb_img)
-
-        wandb.log({"validation/sample_predictions": wandb_images})
+        """Sample prediction logging removed - trusting F1 scores and metrics."""
+        # No-op: Image logging removed to save storage and bandwidth
+        pass
 
     def save_final_model(
         self, model: pl.LightningModule, config: Any, log_dir: str

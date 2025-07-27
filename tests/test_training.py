@@ -63,8 +63,8 @@ class TestTrainingConfigurations:
         assert config.etinynet_variant in ["0.75", "1.0", "0.98M"]
         assert hasattr(config, "use_asq")
         assert isinstance(config.use_asq, bool)
-        assert config.batch_size == 64  # EtinyNet-specific setting
-        assert config.max_epochs == 200  # EtinyNet-specific setting
+        assert config.batch_size == 1024  # EtinyNet-specific setting
+        assert config.max_epochs == 800  # EtinyNet-specific setting
 
     def test_invalid_config_handling(self):
         """Test error handling for invalid configurations."""

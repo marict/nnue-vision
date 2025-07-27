@@ -9,7 +9,6 @@ pytorch-lightning
 pillow
 wandb
 seaborn
-ranger21
 albumentations
 opencv-python-headless
 scikit-learn>=1.0.0
