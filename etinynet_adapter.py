@@ -53,6 +53,7 @@ class EtinyNetAdapter(ModelAdapter):
             asq_bits=getattr(config, "asq_bits", 4),
             lr=getattr(config, "learning_rate", 0.1),
             max_epochs=getattr(config, "max_epochs", 200),
+            weight_decay=getattr(config, "weight_decay", 1e-4),
         )
 
     def create_data_loaders(self, config: Any) -> Tuple[

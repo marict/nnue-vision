@@ -152,24 +152,6 @@ class CompactProgressLogger(Callback):
         if trainer.optimizers:
             lr = trainer.optimizers[0].param_groups[0]["lr"]
 
-        # Calculate weight statistics for insight (similar to weights array in desired format)
-        weight_stats = []
-        total_weights = 0
-        for name, param in pl_module.named_parameters():
-            if "weight" in name and param.requires_grad:
-                weight_mean = param.data.mean().item()
-                weight_std = param.data.std().item()
-                weight_stats.extend([weight_mean, weight_std])
-                total_weights += 1
-                if len(weight_stats) >= 6:  # Limit to 6 values like in desired format
-                    break
-
-        # Format weight stats similar to desired format: weights [1.659,1.017,1.656,1.651,1.162,1.657]
-        weights_str = ""
-        if weight_stats:
-            weights_formatted = [f"{w:.3f}" for w in weight_stats[:6]]
-            weights_str = f", weights [{','.join(weights_formatted)}]"
-
         # Calculate gradient norms
         grad_norm = 0.0
         param_norm = 0.0
@@ -213,7 +195,7 @@ class CompactProgressLogger(Callback):
         log_line = (
             f"{timestamp}\n"
             f"iter {self.iter_count}: loss {loss:.4f}{metrics_str}{grad_metrics}"
-            f"{weights_str}{memory_info}, time {step_time_ms:.2f}ms"
+            f"{memory_info}, time {step_time_ms:.2f}ms"
         )
 
         print(log_line)

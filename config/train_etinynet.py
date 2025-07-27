@@ -13,11 +13,12 @@ use_asq = False  # Disable ASQ for initial training
 asq_bits = 4  # ASQ bits if enabled
 
 # Dataset and model settings
-batch_size = 1536
+batch_size = 1024
 num_workers = 8  # Parallel data loading
 input_size = (32, 32)  # CIFAR image size
 num_classes = 10  # Will be overridden based on dataset choice
-learning_rate = 0.1 * (1536 / 64)  # SGD with momentum works best for EtinyNet
+learning_rate = 0.5
+weight_decay = 2e-4  # L2 regularization strength
 subset = 1.0  # Use full dataset
 
 # Data augmentation settings
@@ -36,7 +37,7 @@ deterministic = True
 seed = 42
 
 # Logging and monitoring
-log_interval = 50  # Reasonable logging frequency
-always_save_checkpoint = True
+log_interval = 1
+always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1

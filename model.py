@@ -266,6 +266,7 @@ class EtinyNet(pl.LightningModule):
         asq_bits=4,
         lr=0.1,
         max_epochs=300,
+        weight_decay=1e-4,
     ):
         super().__init__()
 
@@ -275,6 +276,7 @@ class EtinyNet(pl.LightningModule):
         self.use_asq = use_asq
         self.lr = lr
         self.max_epochs = max_epochs
+        self.weight_decay = weight_decay
 
         # Architecture configurations from Table 1
         if variant == "1.0":
@@ -616,7 +618,7 @@ class EtinyNet(pl.LightningModule):
     def configure_optimizers(self):
         """Configure optimizers and schedulers for EtinyNet."""
         optimizer = torch.optim.SGD(
-            self.parameters(), lr=self.lr, momentum=0.9, weight_decay=1e-4
+            self.parameters(), lr=self.lr, momentum=0.9, weight_decay=self.weight_decay
         )
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(

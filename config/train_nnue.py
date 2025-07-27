@@ -18,6 +18,7 @@ num_workers = 8  # Reasonable parallelism
 input_size = (32, 32)  # Native CIFAR-10 resolution (no upsampling needed)
 num_classes = 10  # CIFAR-10 classes
 learning_rate = 0.5  # Initial LR for cosine annealing (was 3e-4 * (1024 / 64))
+weight_decay = 2e-4  # L2 regularization strength
 subset = 1.0  # Use full dataset
 
 # Data augmentation settings
@@ -36,8 +37,8 @@ deterministic = False
 seed = 42
 
 # Logging and monitoring
-log_interval = 50
-always_save_checkpoint = True
+log_interval = 1
+always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1
 
