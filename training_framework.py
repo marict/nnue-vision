@@ -415,7 +415,7 @@ class BaseTrainer:
         if wandb_run_id:
             early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
             wandb_kwargs["id"] = wandb_run_id
-            wandb_kwargs["resume"] = "must"
+            # PyTorch Lightning's WandbLogger handles resumption automatically when given an id
             # Don't set a new name when resuming - keep the existing run name
         else:
             # Only set a name for new runs

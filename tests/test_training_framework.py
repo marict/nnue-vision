@@ -126,7 +126,7 @@ class TestBaseTrainerMethods:
         assert "name" not in captured_kwargs  # Should not override existing run name
         assert "id" in captured_kwargs
         assert captured_kwargs["id"] == "test_run_id"
-        assert captured_kwargs["resume"] == "must"
+        # PyTorch Lightning's WandbLogger handles resumption automatically when given an id
 
     def test_setup_trainer(self):
         """Test PyTorch Lightning trainer setup."""
