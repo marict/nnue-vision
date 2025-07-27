@@ -8,17 +8,18 @@ mountpoint -q /runpod-volume || echo "/runpod-volume not mounted"
 set -euo pipefail
 exec 2>&1                     # merge stderr into stdout
 
-# Add more verbose logging
-log "Container started - checking environment"
-log "Python version: $(python --version)"
-log "Pip version: $(pip --version)"
-log "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'torch not available yet')"
-
+# Initialize timing and define logging functions first
 start_time=$(date +%s)
 
 log()   { printf '[%6ss] %s\n'  "$(( $(date +%s) - start_time ))" "$*"; }
 err()   { log "ERROR: $*" >&2; }
 trap 'err "failed at line $LINENO"' ERR
+
+# Add more verbose logging
+log "Container started - checking environment"
+log "Python version: $(python --version)"
+log "Pip version: $(pip --version)"
+log "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'torch not available yet')"
 
 #---------------------------------------------------------------------------#
 # workspace & repo
