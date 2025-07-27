@@ -94,12 +94,26 @@ mkdir -p "$log_dir/checkpoints"
 log_file="/runpod-volume/train_$(date +%Y%m%d_%H%M%S).log"
 log "starting NNUE-Vision training – output -> $log_file"
 
-# Update log directory argument if not already specified
-if [[ "$*" != *"--log_dir"* ]]; then
-    set -- "$@" --log_dir="$log_dir"
+# Check if keep-alive flag was passed (before we remove it)
+keep_alive_enabled=false
+if [[ "$*" == *"--keep-alive"* ]]; then
+    keep_alive_enabled=true
 fi
 
-python -u "$@" 2>&1 | tee "$log_file"
+# Remove --keep-alive flag from arguments since train.py doesn't recognize it
+filtered_args=()
+for arg in "$@"; do
+    if [[ "$arg" != "--keep-alive" ]]; then
+        filtered_args+=("$arg")
+    fi
+done
+
+# Update log directory argument if not already specified
+if [[ "${filtered_args[*]}" != *"--log_dir"* ]]; then
+    filtered_args+=("--log_dir=$log_dir")
+fi
+
+python -u "${filtered_args[@]}" 2>&1 | tee "$log_file"
 
 log "training completed in $(( $(date +%s)-start_time ))s"
 
@@ -109,8 +123,8 @@ if [[ -f visual_wake_words_model.pt ]]; then
     log "copied final model to /runpod-volume/"
 fi
 
-# Check if keep-alive flag was passed
-if [[ "$*" == *"--keep-alive"* ]]; then
+# Apply keep-alive behavior if flag was passed
+if [[ "$keep_alive_enabled" == "true" ]]; then
     log "keep-alive mode enabled – keeping container alive"
     log "final model and logs saved to /runpod-volume/"
     log "to access files: ls -la /runpod-volume/"

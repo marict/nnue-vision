@@ -49,26 +49,26 @@ NNUE Training (Neural Network Efficiently Updatable):
 For chess/game engine evaluation networks:
 
     # Basic NNUE training with default config
-    python runpod_service.py train --keep-alive --note "nnue experiment" nnue --config config/train_nnue_default.py
+    python runpod_service_nnue.py train --keep-alive --note "nnue-experiment" -- nnue --config config/train_nnue_default.py
 
     # NNUE with custom parameters
-    python runpod_service.py train --keep-alive --note "nnue custom" nnue --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
+    python runpod_service_nnue.py train --keep-alive --note "nnue-custom" -- nnue --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
 
     # Quick test run
-    python runpod_service.py train nnue --config config/train_nnue_default.py --max_epochs 5
+    python runpod_service_nnue.py train -- nnue --config config/train_nnue_default.py --max_epochs 5
 
 EtinyNet Training (Efficient Tiny Networks):
 --------------------------------------------
 For standard computer vision tasks (CIFAR-10/100):
 
     # Basic EtinyNet training
-    python runpod_service.py train --keep-alive --note "etinynet experiment" etinynet --config config/train_etinynet_default.py
+    python runpod_service_nnue.py train --keep-alive --note "etinynet-experiment" -- etinynet --config config/train_etinynet_default.py
 
     # EtinyNet with custom parameters  
-    python runpod_service.py train --keep-alive --note "etinynet custom" etinynet --config config/train_etinynet_default.py --max_epochs 200 --batch_size 64
+    python runpod_service_nnue.py train --keep-alive --note "etinynet-custom" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --batch_size 64
 
     # Quick test run
-    python runpod_service.py train etinynet --config config/train_etinynet_default.py --max_epochs 5
+    python runpod_service_nnue.py train -- etinynet --config config/train_etinynet_default.py --max_epochs 5
 
 Common Options:
 --------------
@@ -79,10 +79,10 @@ Common Options:
 Example Commands:
 ----------------
     # NNUE training with specific GPU and note
-    python runpod_service.py train --gpu-type "NVIDIA A100 80GB PCIe" --keep-alive --note "baseline-NNUE-experiment" nnue --config config/train_nnue_default.py
+    python runpod_service_nnue.py train --gpu-type "NVIDIA A100 80GB PCIe" --keep-alive --note "baseline-NNUE-experiment" -- nnue --config config/train_nnue_default.py
 
     # EtinyNet training with custom settings
-    python runpod_service.py train --gpu-type "NVIDIA RTX 6000 Ada Generation" --keep-alive --note "reduced-LR-experiment" etinynet --config config/train_etinynet_default.py --max_epochs 200 --learning_rate 0.05
+    python runpod_service_nnue.py train --gpu-type "NVIDIA RTX 6000 Ada Generation" --keep-alive --note "reduced-LR-experiment" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --learning_rate 0.05
 
 Notes:
 ------
@@ -439,13 +439,13 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # NNUE training
-  python runpod_service.py train --keep-alive --note "my-experiment" nnue --config config/train_nnue_default.py
+  python runpod_service_nnue.py train --keep-alive --note "my-experiment" -- nnue --config config/train_nnue_default.py
 
   # EtinyNet training  
-  python runpod_service.py train --keep-alive --note "my-experiment" etinynet --config config/train_etinynet_default.py
+  python runpod_service_nnue.py train --keep-alive --note "my-experiment" -- etinynet --config config/train_etinynet_default.py
 
   # Show detailed help
-  python runpod_service.py help
+  python runpod_service_nnue.py help
 
 For complete usage guide, run: python runpod_service.py help
         """,
@@ -459,7 +459,7 @@ For complete usage guide, run: python runpod_service.py help
     t.add_argument(
         "train_args",
         nargs="*",
-        help="Training arguments (e.g., --config config/train_nnue_default.py --max_epochs 100 --batch_size 64)",
+        help="Training arguments (e.g., nnue --config config/train_nnue_default.py --max_epochs 100). Use -- to separate RunPod options from training arguments.",
     )
     t.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name")
     t.add_argument("--api-key", help="RunPod API key")
