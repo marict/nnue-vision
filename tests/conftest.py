@@ -46,6 +46,44 @@ from data import GenericVisionDataset, create_data_loaders
 from model import NNUE, GridFeatureSet, LossParams
 
 
+class DummyWandbLogger:
+    """Minimal stub for Lightning's WandbLogger used in tests."""
+
+    def __init__(self, *args, **kwargs):
+        # Provide just the attributes accessed in the training script
+        from types import SimpleNamespace
+
+        self.experiment = SimpleNamespace(
+            config={},
+            url="http://wandb.local/run",
+        )
+        self.save_dir = "."
+        self.version = "test"
+
+    # Minimal API surface used by Lightning
+    def log_metrics(self, *args, **kwargs):
+        pass
+
+    def log_hyperparams(self, *args, **kwargs):
+        pass
+
+    def finalize(self, *args, **kwargs):
+        pass
+
+    def log_graph(self, *args, **kwargs):
+        pass
+
+    def save(self):
+        pass
+
+    # Gracefully handle any other method/attribute requests
+    def __getattr__(self, item):
+        def _dummy(*args, **kwargs):
+            return None
+
+        return _dummy
+
+
 class MockDataset(torch.utils.data.Dataset):
     """Ultra-fast mock dataset for testing - no downloads, pure synthetic."""
 

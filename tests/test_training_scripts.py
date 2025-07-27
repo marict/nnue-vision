@@ -8,9 +8,6 @@ using ultra-minimal configurations that complete in seconds.
 import os
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -18,41 +15,7 @@ import torch
 
 import train
 
-
-class DummyWandbLogger:
-    """Minimal stub for Lightning's WandbLogger used in tests."""
-
-    def __init__(self, *args, **kwargs):
-        # Provide just the attributes accessed in the training script
-        self.experiment = SimpleNamespace(
-            config={},
-            url="http://wandb.local/run",
-        )
-        self.save_dir = "."
-        self.version = "test"
-
-    # Minimal API surface used by Lightning
-    def log_metrics(self, *args, **kwargs):
-        pass
-
-    def log_hyperparams(self, *args, **kwargs):
-        pass
-
-    def finalize(self, *args, **kwargs):
-        pass
-
-    def log_graph(self, *args, **kwargs):
-        pass
-
-    def save(self):
-        pass
-
-    # Gracefully handle any other method/attribute requests
-    def __getattr__(self, item):
-        def _dummy(*args, **kwargs):
-            return None
-
-        return _dummy
+from .conftest import DummyWandbLogger
 
 
 @pytest.fixture
@@ -73,14 +36,7 @@ def setup_test_env(monkeypatch, tmp_path):
 def mock_wandb_components(monkeypatch):
     """Mock all wandb-related components to avoid network calls."""
     # Mock wandb module
-    mock_wandb = SimpleNamespace(
-        init=lambda *_, **__: SimpleNamespace(url="local", id="test_id"),
-        log=lambda *_1, **_2: None,
-        finish=lambda *_a, **_kw: None,
-        Artifact=lambda *_, **__: SimpleNamespace(add_file=lambda x: None),
-        log_artifact=lambda x: None,
-        Image=lambda *_, **__: "mock_image",
-    )
+    mock_wandb = DummyWandbLogger()
 
     return mock_wandb
 

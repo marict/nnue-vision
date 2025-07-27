@@ -14,14 +14,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import (
     Callback,
     EarlyStopping,
     ModelCheckpoint,
-    TQDMProgressBar,
 )
 from pytorch_lightning.loggers import WandbLogger
+from sklearn.metrics import (
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
 import runpod_service_nnue
 import wandb
@@ -115,145 +121,168 @@ class ModelAdapter(ABC):
         return run_name
 
 
-class WandbMetricsCallback(Callback):
-    """Custom callback for comprehensive wandb logging."""
+class CompactProgressLogger(Callback):
+    """Custom callback for compact iteration-based logging similar to the desired format."""
 
     def __init__(self):
         super().__init__()
-        self.train_start_time = None
-        self.epoch_start_time = None
         self.step_start_time = None
-
-    def on_train_start(self, trainer, pl_module):
-        """Log initial setup information."""
-        self.train_start_time = time.time()
-
-        # Log model architecture details
-        total_params = sum(p.numel() for p in pl_module.parameters())
-        trainable_params = sum(
-            p.numel() for p in pl_module.parameters() if p.requires_grad
-        )
-
-        wandb.log(
-            {
-                "model/total_parameters": total_params,
-                "model/trainable_parameters": trainable_params,
-                "model/model_size_mb": total_params
-                * 4
-                / (1024 * 1024),  # Assuming float32
-            }
-        )
-
-        # Log system information
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                gpu_name = torch.cuda.get_device_name(i)
-                gpu_memory = torch.cuda.get_device_properties(i).total_memory / (
-                    1024**3
-                )
-                wandb.log(
-                    {
-                        f"system/gpu_{i}_name": gpu_name,
-                        f"system/gpu_{i}_memory_gb": gpu_memory,
-                    }
-                )
-
-    def on_train_epoch_start(self, trainer, pl_module):
-        """Log epoch start time."""
-        self.epoch_start_time = time.time()
+        self.iter_count = 0
+        self.running_metrics = {}
+        self.val_metrics_history = []
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
-        """Log batch start time and learning rate."""
+        """Record timing for each batch."""
         self.step_start_time = time.time()
 
-        # Log learning rate from optimizer
-        if trainer.optimizers:
-            current_lr = trainer.optimizers[0].param_groups[0]["lr"]
-            wandb.log(
-                {
-                    "train/learning_rate": current_lr,
-                    "train/global_step": trainer.global_step,
-                }
-            )
-
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        """Log detailed training metrics after each batch."""
-        if self.step_start_time is not None:
-            step_time = time.time() - self.step_start_time
-            wandb.log(
-                {
-                    "timing/step_time_ms": step_time * 1000,
-                    "timing/steps_per_second": 1.0 / step_time,
-                }
-            )
+        """Log compact training metrics after each batch."""
+        self.iter_count += 1
 
-        # Log gradient information
+        # Calculate timing
+        step_time_ms = 0.0
+        if self.step_start_time is not None:
+            step_time_ms = (time.time() - self.step_start_time) * 1000
+
+        # Get loss from outputs
+        loss = outputs["loss"].item() if isinstance(outputs, dict) else outputs.item()
+
+        # Get learning rate
+        lr = 0.0
+        if trainer.optimizers:
+            lr = trainer.optimizers[0].param_groups[0]["lr"]
+
+        # Calculate weight statistics for insight (similar to weights array in desired format)
+        weight_stats = []
+        total_weights = 0
+        for name, param in pl_module.named_parameters():
+            if "weight" in name and param.requires_grad:
+                weight_mean = param.data.mean().item()
+                weight_std = param.data.std().item()
+                weight_stats.extend([weight_mean, weight_std])
+                total_weights += 1
+                if len(weight_stats) >= 6:  # Limit to 6 values like in desired format
+                    break
+
+        # Format weight stats similar to desired format: weights [1.659,1.017,1.656,1.651,1.162,1.657]
+        weights_str = ""
+        if weight_stats:
+            weights_formatted = [f"{w:.3f}" for w in weight_stats[:6]]
+            weights_str = f", weights [{','.join(weights_formatted)}]"
+
+        # Calculate gradient norms
         grad_norm = 0.0
         param_norm = 0.0
-        grad_max = 0.0
-
-        for name, param in pl_module.named_parameters():
+        for param in pl_module.parameters():
             if param.grad is not None:
                 param_norm += param.data.norm(2).item() ** 2
                 grad_norm += param.grad.data.norm(2).item() ** 2
-                grad_max = max(grad_max, param.grad.data.abs().max().item())
-
         grad_norm = grad_norm**0.5
         param_norm = param_norm**0.5
 
-        wandb.log(
-            {
-                "gradients/grad_norm": grad_norm,
-                "gradients/param_norm": param_norm,
-                "gradients/grad_max": grad_max,
-                "gradients/grad_param_ratio": grad_norm / (param_norm + 1e-8),
-            }
+        # Get additional metrics from logged metrics
+        logged_metrics = trainer.logged_metrics
+        additional_metrics = []
+
+        for key, value in logged_metrics.items():
+            if (
+                "train" in key
+                and key != "train_loss"
+                and isinstance(value, torch.Tensor)
+            ):
+                metric_name = key.replace("train_", "").replace("train/", "")
+                additional_metrics.append(f"{metric_name} {value.item():.4f}")
+
+        # Memory usage if available
+        memory_info = ""
+        if torch.cuda.is_available():
+            memory_gb = torch.cuda.memory_allocated() / (1024**3)
+            memory_info = f", mem {memory_gb:.2f}GB"
+
+        # Format timestamp
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Create the compact log line (similar to desired format but with available metrics)
+        metrics_str = ""
+        if additional_metrics:
+            metrics_str = ", " + ", ".join(additional_metrics)
+
+        # Add gradient and parameter norms as pseudo-metrics
+        grad_metrics = f", grad_norm {grad_norm:.4f}, param_norm {param_norm:.4f}"
+
+        log_line = (
+            f"{timestamp}\n"
+            f"iter {self.iter_count}: loss {loss:.4f}{metrics_str}{grad_metrics}"
+            f"{weights_str}{memory_info}, time {step_time_ms:.2f}ms"
         )
 
-        # Log memory usage if CUDA is available
-        if torch.cuda.is_available():
-            memory_allocated = torch.cuda.memory_allocated() / (1024**3)
-            memory_reserved = torch.cuda.memory_reserved() / (1024**3)
-            wandb.log(
-                {
-                    "system/gpu_memory_allocated_gb": memory_allocated,
-                    "system/gpu_memory_reserved_gb": memory_reserved,
-                }
-            )
+        print(log_line)
 
-        # Log disk usage periodically (every 10 steps to avoid overhead)
-        if trainer.global_step % 10 == 0:
-            disk_usage = get_disk_usage_percent()
-            wandb.log({"system/disk_usage_percent": disk_usage})
-
-            # Check for disk space emergency
-            if check_disk_space_emergency(
-                threshold=90.0
-            ):  # Lower threshold for warnings
-                wandb.log({"alerts/disk_space_warning": True})
-                print("⚠️  Warning: Disk space is getting low!")
-
-                if disk_usage > 95.0:  # Critical threshold
-                    wandb.log({"alerts/disk_space_critical": True})
-                    cleanup_disk_space_emergency()
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        """Log epoch timing and training progress."""
-        if self.epoch_start_time is not None:
-            epoch_time = time.time() - self.epoch_start_time
-            wandb.log(
-                {
-                    "timing/epoch_time_minutes": epoch_time / 60,
-                    "timing/total_training_hours": (time.time() - self.train_start_time)
-                    / 3600,
-                }
-            )
+        # Update running averages for validation display
+        self.running_metrics["loss"] = loss
+        self.running_metrics["lr"] = lr
+        self.running_metrics["grad_norm"] = grad_norm
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        """Log validation results and model predictions."""
-        # Log sample predictions if we're in validation
-        if hasattr(pl_module, "log_sample_predictions"):
-            pl_module.log_sample_predictions()
+        """Log validation results with additional metrics."""
+        # Get validation metrics
+        val_metrics = {}
+        for key, value in trainer.logged_metrics.items():
+            if "val" in key and isinstance(value, torch.Tensor):
+                metric_name = key.replace("val_", "").replace("val/", "")
+                val_metrics[metric_name] = value.item()
+
+        # Store for history
+        self.val_metrics_history.append(val_metrics.copy())
+
+        # Print validation summary with more detail
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"{timestamp}")
+
+        # Format validation metrics similar to training format
+        val_loss = val_metrics.get("loss", 0.0)
+        val_acc = val_metrics.get("acc", 0.0)
+        val_f1 = val_metrics.get("f1", 0.0)
+        val_precision = val_metrics.get("precision", 0.0)
+        val_recall = val_metrics.get("recall", 0.0)
+
+        validation_line = (
+            f"Validation: loss {val_loss:.4f}, acc {val_acc:.4f}, "
+            f"f1 {val_f1:.4f}, precision {val_precision:.4f}, recall {val_recall:.4f}"
+        )
+
+        # Add any other validation metrics
+        other_metrics = []
+        for key, value in val_metrics.items():
+            if key not in ["loss", "acc", "f1", "precision", "recall"]:
+                other_metrics.append(f"{key} {value:.4f}")
+
+        if other_metrics:
+            validation_line += ", " + ", ".join(other_metrics)
+
+        print(validation_line)
+
+        # Show improvement if we have history
+        if len(self.val_metrics_history) > 1:
+            prev_loss = self.val_metrics_history[-2].get("loss", val_loss)
+            improvement = prev_loss - val_loss
+            if improvement > 0:
+                print(
+                    f"Validation loss improved by {improvement:.4f}. New best: {val_loss:.4f}"
+                )
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        """Log epoch completion."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{timestamp}")
+        print(f"Epoch {trainer.current_epoch + 1} completed")
+
+    def on_train_end(self, trainer, pl_module):
+        """Log training completion."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{timestamp}")
+        print("Training completed!")
 
 
 class BaseTrainer:
@@ -349,9 +378,12 @@ class BaseTrainer:
             config.learning_rate = args.learning_rate
         if args.note is not None:
             config.note = args.note
-        if args.use_augmentation is not None:
+        if hasattr(args, "use_augmentation") and args.use_augmentation is not None:
             config.use_augmentation = args.use_augmentation
-        if args.augmentation_strength is not None:
+        if (
+            hasattr(args, "augmentation_strength")
+            and args.augmentation_strength is not None
+        ):
             config.augmentation_strength = args.augmentation_strength
 
         # Apply model-specific overrides
@@ -405,7 +437,7 @@ class BaseTrainer:
             callbacks=callbacks,
             log_every_n_steps=getattr(config, "log_interval", 50),
             enable_checkpointing=getattr(config, "always_save_checkpoint", True),
-            enable_progress_bar=getattr(config, "enable_progress_bar", True),
+            enable_progress_bar=False,  # Disable default progress bar - using our custom logger
             deterministic=getattr(config, "deterministic", True),
             check_val_every_n_epoch=getattr(config, "check_val_every_n_epoch", 1),
         )
@@ -508,7 +540,6 @@ class BaseTrainer:
 
             # Set up callbacks
             callbacks = [
-                TQDMProgressBar(refresh_rate=getattr(config, "log_interval", 50)),
                 ModelCheckpoint(
                     monitor="val_loss",
                     mode="min",
@@ -522,7 +553,7 @@ class BaseTrainer:
                     patience=getattr(config, "patience", 10),
                     verbose=True,
                 ),
-                WandbMetricsCallback(),
+                CompactProgressLogger(),
             ]
 
             # Add model-specific callbacks

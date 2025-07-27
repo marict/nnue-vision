@@ -18,11 +18,14 @@ from "EtinyNet: Extremely Tiny Network for TinyML" by Xu et al. (2022)
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterator, Optional, Tuple, Union
 
+import numpy as np
 import pytorch_lightning as pl
 import ranger21
 import torch
+import torch.nn.functional as F
+from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 # Default layer sizes (can be overridden in NNUE constructor)
@@ -580,9 +583,34 @@ class EtinyNet(pl.LightningModule):
         _, predicted = torch.max(outputs.data, 1)
         accuracy = (predicted == targets).sum().item() / targets.size(0)
 
+        # Calculate additional metrics for multi-class classification
+        if self.num_classes > 2:
+            # Multi-class metrics
+            targets_np = targets.cpu().numpy()
+            predicted_np = predicted.cpu().numpy()
+
+            f1 = f1_score(targets_np, predicted_np, average="weighted", zero_division=0)
+            precision = precision_score(
+                targets_np, predicted_np, average="weighted", zero_division=0
+            )
+            recall = recall_score(
+                targets_np, predicted_np, average="weighted", zero_division=0
+            )
+        else:
+            # Binary classification metrics
+            targets_np = targets.cpu().numpy()
+            predicted_np = predicted.cpu().numpy()
+
+            f1 = f1_score(targets_np, predicted_np, zero_division=0)
+            precision = precision_score(targets_np, predicted_np, zero_division=0)
+            recall = recall_score(targets_np, predicted_np, zero_division=0)
+
         # Log metrics
         self.log("val_loss", loss, prog_bar=True)
         self.log("val_acc", accuracy, prog_bar=True)
+        self.log("val_f1", f1, prog_bar=True)
+        self.log("val_precision", precision, prog_bar=True)
+        self.log("val_recall", recall, prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):

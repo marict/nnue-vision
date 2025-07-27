@@ -21,41 +21,7 @@ from etinynet_adapter import EtinyNetAdapter
 from nnue_adapter import NNUEAdapter
 from training_framework import BaseTrainer
 
-
-class DummyWandbLogger:
-    """Minimal stub for Lightning's WandbLogger used in tests."""
-
-    def __init__(self, *args, **kwargs):
-        # Provide just the attributes accessed in the training script
-        self.experiment = SimpleNamespace(
-            config={},
-            url="http://wandb.local/run",
-        )
-        self.save_dir = "."
-        self.version = "test"
-
-    # Minimal API surface used by Lightning
-    def log_metrics(self, *args, **kwargs):
-        pass
-
-    def log_hyperparams(self, *args, **kwargs):
-        pass
-
-    def finalize(self, *args, **kwargs):
-        pass
-
-    def log_graph(self, *args, **kwargs):
-        pass
-
-    def save(self):
-        pass
-
-    # Gracefully handle any other method/attribute requests
-    def __getattr__(self, item):
-        def _dummy(*args, **kwargs):
-            return None
-
-        return _dummy
+from .conftest import DummyWandbLogger
 
 
 @pytest.fixture

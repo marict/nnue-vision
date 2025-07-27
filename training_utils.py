@@ -54,17 +54,19 @@ class EarlyLogCapture:
         self.captured_logs.clear()
 
 
-# Global instance for early log capture
+# Global early log capture instance
 _early_log_capture = EarlyLogCapture()
 
 
 def early_log(message: str) -> None:
-    """Log a message, capturing it for later W&B replay if before W&B init."""
+    """Log a message that will be captured and replayed to W&B."""
+    global _early_log_capture
     _early_log_capture.log(message)
 
 
 def replay_early_logs_to_wandb() -> None:
-    """Replay captured early logs to W&B and disable further capture."""
+    """Replay all early logs to W&B and disable further capture."""
+    global _early_log_capture
     _early_log_capture.replay_to_wandb()
 
 
@@ -156,30 +158,28 @@ def get_git_info() -> dict[str, str]:
 
 
 def log_git_commit_info() -> None:
-    """Log current git commit information for debugging and tracking."""
-    print("Git repository analysis:")
+    """Log current git commit information."""
     git_info = get_git_info()
-
-    for key, value in git_info.items():
-        if key.startswith("error"):
-            print(f"  ERROR: {value}")
-        else:
-            print(f"  {key}: {value}")
+    if git_info:
+        early_log(f"📝 Git commit: {git_info['commit_hash'][:8]}")
+        early_log(f"🌿 Branch: {git_info['branch']}")
+        if git_info["error"]:
+            early_log("⚠️  Git command failed")
+    else:
+        early_log("❌ Git information not available")
 
 
 def log_git_info_to_wandb(wandb_run) -> None:
-    """Log git information to wandb run."""
-    if wandb_run is None:
-        return
-
+    """Log git information to W&B run."""
     git_info = get_git_info()
-
-    # Log git info as wandb config
-    for key, value in git_info.items():
-        try:
-            wandb_run.config[f"git_{key}"] = value
-        except Exception as e:
-            print(f"Warning: Could not log git_{key} to wandb: {e}")
+    if git_info and wandb_run:
+        wandb_run.config.update(
+            {
+                "git_commit": git_info["commit_hash"],
+                "git_branch": git_info["branch"],
+                "git_dirty": False,  # No direct 'dirty' field in get_git_info, so set to False
+            }
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -187,85 +187,56 @@ def log_git_info_to_wandb(wandb_run) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def get_disk_usage_percent(path: str = ".") -> float:
-    """Get disk usage percentage for the given path.
-
-    Args:
-        path: Path to check disk usage for (defaults to current directory)
-
-    Returns:
-        Disk usage as a percentage (0-100)
-    """
+def get_disk_usage_percent() -> float:
+    """Get current disk usage percentage."""
     try:
-        _, total, free = shutil.disk_usage(path)
-        used = total - free
-        usage_percent = (used / total) * 100.0
-        return usage_percent
-    except Exception as e:
-        print(f"Warning: Could not check disk usage for {path}: {e}")
-        return 0.0
+        import psutil
 
-
-def check_disk_space_emergency(path: str = ".", threshold: float = 95.0) -> bool:
-    """Check if disk usage exceeds emergency threshold.
-
-    Args:
-        path: Path to check disk usage for
-        threshold: Emergency threshold percentage (default: 95%)
-
-    Returns:
-        True if disk usage exceeds threshold, False otherwise
-    """
-    usage_percent = get_disk_usage_percent(path)
-
-    if usage_percent >= threshold:
-        print(
-            f"🚨 DISK SPACE EMERGENCY: {usage_percent:.1f}% usage exceeds {threshold}% threshold!"
-        )
-        print(f"📊 Disk usage details for {path}:")
-
+        usage = psutil.disk_usage("/")
+        return (usage.used / usage.total) * 100
+    except ImportError:
         try:
-            _, total, free = shutil.disk_usage(path)
-            print(f"  Total: {total / (1024**3):.1f} GB")
-            print(f"  Free:  {free / (1024**3):.1f} GB")
-            print(f"  Used:  {(total - free) / (1024**3):.1f} GB")
-        except Exception as e:
-            print(f"  Could not get detailed disk usage: {e}")
-
-        return True
-
-    return False
+            # Fallback using shutil
+            total, used, free = shutil.disk_usage("/")
+            return (used / total) * 100
+        except:
+            return 0.0
 
 
-def cleanup_disk_space_emergency():
-    """Emergency disk space cleanup procedures."""
-    print("🧹 Attempting emergency disk space cleanup...")
+def check_disk_space_emergency(threshold: float = 95.0) -> bool:
+    """Check if disk space is critically low."""
+    current_usage = get_disk_usage_percent()
+    return current_usage > threshold
 
-    cleanup_paths = ["/tmp", str(Path.home() / ".cache"), "/var/tmp"]
 
-    cleaned_mb = 0
+def cleanup_disk_space_emergency() -> None:
+    """Attempt to clean up disk space in emergency situations."""
+    try:
+        early_log("🧹 Attempting emergency disk cleanup...")
 
-    for cleanup_path in cleanup_paths:
-        if os.path.exists(cleanup_path):
-            try:
-                # Clean temporary files older than 1 hour
-                for root, dirs, files in os.walk(cleanup_path):
-                    for file in files:
-                        file_path = Path(root) / file
-                        try:
-                            if file_path.stat().st_mtime < (
-                                time.time() - 3600
-                            ):  # 1 hour old
-                                size_mb = file_path.stat().st_size / (1024 * 1024)
-                                file_path.unlink()
-                                cleaned_mb += size_mb
-                        except Exception:
-                            continue  # Skip files we can't delete
-            except Exception as e:
-                print(f"Warning: Could not clean {cleanup_path}: {e}")
+        # Clean up PyTorch cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            early_log("🗑️  Cleared CUDA cache")
 
-    print(f"🧹 Emergency cleanup freed {cleaned_mb:.1f} MB")
-    return cleaned_mb
+        # Clean up temp directories
+        import tempfile
+
+        temp_dir = Path(tempfile.gettempdir())
+        if temp_dir.exists():
+            # Only clean our own temp files to be safe
+            for pattern in ["*.tmp", "tmp*", "temp*"]:
+                for file_path in temp_dir.glob(pattern):
+                    try:
+                        if file_path.is_file():
+                            file_path.unlink()
+                    except:
+                        pass
+
+        early_log("✅ Emergency cleanup completed")
+
+    except Exception as e:
+        early_log(f"❌ Emergency cleanup failed: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -273,72 +244,34 @@ def cleanup_disk_space_emergency():
 # --------------------------------------------------------------------------- #
 
 
-def generate_run_name(cfg) -> str:
-    """Generate a run name using RunPod identifier or local random string."""
-    # Check if we're running on RunPod
-    runpod_id = os.environ.get("RUNPOD_POD_ID")
+def generate_run_name(
+    model_type: str,
+    config_name: str = "default",
+    note: str = None,
+    timestamp: bool = True,
+) -> str:
+    """Generate a descriptive run name for training."""
+    parts = [model_type.lower()]
 
-    if runpod_id and runpod_id.strip():
-        # Use RunPod identifier
-        base = runpod_id
-    else:
-        # Generate local identifier with random string
-        random_str = "".join(
-            random.choices(string.ascii_lowercase + string.digits, k=12)
-        )
-        base = f"local_{random_str}"
+    if config_name and config_name != "default":
+        # Extract meaningful parts from config name
+        config_clean = config_name.replace("train_", "").replace("_default", "")
+        if config_clean:
+            parts.append(config_clean)
 
-    # Append note if provided
-    note_val = getattr(cfg, "note", None)
-    if note_val:
-        return f"{base} - {note_val}"
-    return base
+    if note:
+        # Clean up note: remove spaces, keep alphanumeric and basic punctuation
+        note_clean = "".join(c for c in note if c.isalnum() or c in "-_").lower()
+        if note_clean:
+            parts.append(note_clean)
 
+    if timestamp:
+        import time
 
-@dataclass
-class BaseConfig:
-    """Base class for training configurations."""
+        time_str = time.strftime("%m%d-%H%M")
+        parts.append(time_str)
 
-    # Meta
-    name: str
-    note: str | None = None
-
-    # Checkpointing
-    init_from: str = "scratch"
-    always_save_checkpoint: bool = True
-    save_best: bool = False
-    clear_previous_checkpoints: bool = False
-    # When True, continuously overwrite the latest checkpoint file from this
-    # run instead of creating a new file each time. A unique sub-directory
-    # (based on the current wandb run name) will be used so that checkpoints
-    # from other runs are left untouched.
-    overwrite_previous: bool = True
-
-    # Evaluation
-    eval_once: bool = False
-    eval_interval: int = 250
-    log_interval: int = 1
-    eval_iters: int = 200
-
-    # DDP / System
-    backend: str = "nccl"
-    dtype: str = (
-        "bfloat16"
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        else "float16"
-    )
-    compile: bool = True
-
-    # Runpod
-    keep_alive: bool = False
-
-    # Debugging
-    check_nans: bool = False
-
-    # When True, reset the stored iteration counter to zero when reloading a
-    # checkpoint. This lets you start a fresh learning-rate schedule while
-    # still initialising the model with pre-trained weights.
-    reload_reset_iters: bool = False
+    return "-".join(parts)
 
 
 def load_config_file(path: str) -> Dict[str, object]:

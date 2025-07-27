@@ -1,14 +1,12 @@
 """
-Tests for the training framework components.
+Test the unified training framework and related utilities.
 
-This module tests the core training framework functionality including:
-- WandbMetricsCallback
-- BaseTrainer methods
-- Utility functions
+These tests ensure that the training framework components work correctly.
 """
 
 import os
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -18,75 +16,7 @@ import torch
 
 from etinynet_adapter import EtinyNetAdapter
 from nnue_adapter import NNUEAdapter, adapt_batch_for_nnue
-from training_framework import BaseTrainer, WandbMetricsCallback
-
-
-class TestWandbMetricsCallback:
-    """Test the WandbMetricsCallback functionality."""
-
-    def test_callback_creation(self):
-        """Test that callback can be created."""
-        callback = WandbMetricsCallback()
-        assert callback.train_start_time is None
-        assert callback.epoch_start_time is None
-        assert callback.step_start_time is None
-
-    def test_callback_timing_methods(self, monkeypatch):
-        """Test callback timing methods."""
-        mock_wandb = MagicMock()
-        monkeypatch.setattr("training_framework.wandb", mock_wandb)
-
-        callback = WandbMetricsCallback()
-
-        # Mock trainer and pl_module
-        trainer = MagicMock()
-        trainer.optimizers = [MagicMock()]
-        trainer.optimizers[0].param_groups = [{"lr": 0.001}]
-        trainer.global_step = 10
-
-        pl_module = MagicMock()
-        pl_module.parameters.return_value = [
-            torch.tensor([1.0, 2.0], requires_grad=True),
-            torch.tensor([3.0, 4.0], requires_grad=True),
-        ]
-
-        # Test train start
-        callback.on_train_start(trainer, pl_module)
-        assert callback.train_start_time is not None
-        assert mock_wandb.log.called
-
-        # Test epoch start
-        callback.on_train_epoch_start(trainer, pl_module)
-        assert callback.epoch_start_time is not None
-
-        # Test batch start
-        callback.on_train_batch_start(trainer, pl_module, None, 0)
-        assert callback.step_start_time is not None
-
-    def test_callback_gpu_logging(self, monkeypatch):
-        """Test GPU information logging when CUDA is available."""
-        mock_wandb = MagicMock()
-        monkeypatch.setattr("training_framework.wandb", mock_wandb)
-
-        # Mock CUDA availability
-        monkeypatch.setattr("torch.cuda.is_available", lambda: True)
-        monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
-        monkeypatch.setattr("torch.cuda.get_device_name", lambda i: "Test GPU")
-        mock_props = MagicMock()
-        mock_props.total_memory = 8 * 1024**3  # 8GB
-        monkeypatch.setattr("torch.cuda.get_device_properties", lambda i: mock_props)
-
-        callback = WandbMetricsCallback()
-        trainer = MagicMock()
-        pl_module = MagicMock()
-        pl_module.parameters.return_value = []
-
-        callback.on_train_start(trainer, pl_module)
-
-        # Check that GPU info was logged
-        log_calls = [call[0][0] for call in mock_wandb.log.call_args_list]
-        gpu_logged = any("system/gpu_0_name" in call for call in log_calls)
-        assert gpu_logged
+from training_framework import BaseTrainer
 
 
 class TestAdaptBatchForNNUE:

@@ -5,12 +5,14 @@ Provides NNUE-specific training functionality for the unified training framework
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import Callback
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 import wandb
 from data import create_data_loaders
@@ -120,11 +122,59 @@ class NNUEWrapper(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         adapted_batch = adapt_batch_for_nnue(batch, self.num_ls_buckets)
-        # Compute loss without internal logging
         loss = self._compute_loss(adapted_batch, batch_idx)
-        # Log using the wrapper's logging context
-        if getattr(self, "_trainer", None) is not None:
-            self.log("val_loss", loss)
+
+        # Extract predictions for metrics calculation
+        (
+            images,
+            targets,
+            scores,
+            layer_stack_indices,
+        ) = adapted_batch
+
+        with torch.no_grad():
+            logits = self.nnue(images, layer_stack_indices)
+
+            if self.nnue.num_classes > 1:
+                # Multi-class classification metrics
+                predicted = torch.argmax(logits, dim=1)
+                targets_np = targets.cpu().numpy()
+                predicted_np = predicted.cpu().numpy()
+
+                accuracy = accuracy_score(targets_np, predicted_np)
+                f1 = f1_score(
+                    targets_np, predicted_np, average="weighted", zero_division=0
+                )
+                precision = precision_score(
+                    targets_np, predicted_np, average="weighted", zero_division=0
+                )
+                recall = recall_score(
+                    targets_np, predicted_np, average="weighted", zero_division=0
+                )
+
+                self.log("val_acc", accuracy, prog_bar=True)
+                self.log("val_f1", f1, prog_bar=True)
+                self.log("val_precision", precision, prog_bar=True)
+                self.log("val_recall", recall, prog_bar=True)
+            else:
+                # For NNUE regression, we can calculate some proxy metrics
+                # Convert to binary classification for evaluation purposes
+                predicted_binary = (logits > 0).float()
+                targets_binary = (targets > 0).float()
+
+                accuracy = (predicted_binary.squeeze() == targets_binary).float().mean()
+
+                # Calculate correlation as a regression metric
+                correlation = torch.corrcoef(torch.stack([logits.squeeze(), targets]))[
+                    0, 1
+                ]
+                if torch.isnan(correlation):
+                    correlation = torch.tensor(0.0)
+
+                self.log("val_acc", accuracy, prog_bar=True)
+                self.log("val_correlation", correlation, prog_bar=True)
+
+        self.log("val_loss", loss, prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):
