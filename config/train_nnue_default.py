@@ -42,6 +42,9 @@ always_save_checkpoint = True  # Keep checkpointing enabled to avoid conflicts
 enable_progress_bar = True  # Keep progress bar enabled to avoid conflicts
 check_val_every_n_epoch = 1
 
+# RunPod settings
+keep_alive = False  # Don't keep RunPod instances alive after training
+
 # Default settings
 log_dir = "logs"
 project_name = "nnue_default"

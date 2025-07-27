@@ -42,6 +42,9 @@ always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1
 
+# RunPod settings
+keep_alive = False  # Don't keep RunPod instances alive after training
+
 # Logging backends
 log_dir = "logs"
 project_name = "nnue-vision-train"
