@@ -13,11 +13,11 @@ num_ls_buckets = 8  # Standard bucket count
 visual_threshold = 0.0
 
 # Dataset and model settings
-batch_size = 512  # GPU-friendly
+batch_size = 1536  # GPU-friendly
 num_workers = 8  # Reasonable parallelism
 input_size = (32, 32)  # Native CIFAR-10 resolution (no upsampling needed)
 num_classes = 10  # CIFAR-10 classes
-learning_rate = 3e-4 * (512 / 64)
+learning_rate = 3e-4 * (1536 / 64)
 subset = 1.0  # Use full dataset
 
 # Data augmentation settings
