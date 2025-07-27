@@ -16,15 +16,12 @@ Additionally implements EtinyNet: Extremely Tiny Network for TinyML
 from "EtinyNet: Extremely Tiny Network for TinyML" by Xu et al. (2022)
 """
 
-import math
 from dataclasses import dataclass
-from typing import Iterator, Optional, Tuple, Union
+from typing import Optional
 
-import numpy as np
 import pytorch_lightning as pl
 import ranger21
 import torch
-import torch.nn.functional as F
 from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 

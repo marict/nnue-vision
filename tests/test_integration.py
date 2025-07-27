@@ -3,11 +3,8 @@
 import pytest
 import torch
 
-from model import NNUE
 
 # Use fast fixtures from conftest.py instead of slow real data
-
-
 class TestBasicIntegration:
     """Test basic integration functionality."""
 
