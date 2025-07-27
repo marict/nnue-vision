@@ -162,51 +162,104 @@ class GenericVisionDataset(Dataset):
                     ),
                 ]
             elif self.augmentation_strength == "heavy":
-                augmentation_transforms = [
-                    # Aggressive geometric augmentations
-                    A.HorizontalFlip(p=0.6),
-                    A.RandomRotate90(p=0.6),
-                    A.Rotate(limit=25, p=0.5),
+                # Start with all medium transformations
+                medium_transforms = [
+                    # Geometric augmentations
+                    A.HorizontalFlip(p=0.5),
+                    A.RandomRotate90(p=0.5),
+                    A.Rotate(limit=15, p=0.3),
                     A.ShiftScaleRotate(
-                        shift_limit=0.15, scale_limit=0.15, rotate_limit=25, p=0.5
+                        shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.3
                     ),
-                    # Strong brightness/contrast
+                    # Brightness/contrast augmentations
                     A.RandomBrightnessContrast(
-                        brightness_limit=0.3, contrast_limit=0.3, p=0.5
+                        brightness_limit=0.2, contrast_limit=0.2, p=0.3
+                    ),
+                    A.HueSaturationValue(
+                        hue_shift_limit=10,
+                        sat_shift_limit=15,
+                        val_shift_limit=10,
+                        p=0.3,
+                    ),
+                    # Blur and noise
+                    A.OneOf(
+                        [
+                            A.Blur(blur_limit=3, p=1.0),
+                            A.GaussianBlur(blur_limit=3, p=1.0),
+                            A.MotionBlur(blur_limit=3, p=1.0),
+                        ],
+                        p=0.2,
+                    ),
+                    A.GaussNoise(std_range=(0.01, 0.05), p=0.2),
+                    # Cutout augmentations
+                    A.CoarseDropout(
+                        num_holes_range=(1, 1),
+                        hole_height_range=(0.05, 0.15),  # As proportions of image
+                        hole_width_range=(0.05, 0.15),
+                        p=0.3,
+                    ),
+                    # Advanced augmentations
+                    A.RandomShadow(p=0.1),
+                    A.RandomFog(p=0.1),
+                    A.GridDistortion(p=0.1),
+                    A.ElasticTransform(p=0.1),
+                    # Color augmentations
+                    A.CLAHE(clip_limit=2.0, p=0.1),
+                    A.ColorJitter(p=0.2),
+                    A.Posterize(p=0.1),
+                    A.Equalize(p=0.1),
+                ]
+
+                # Add aggressive heavy augmentations on top
+                heavy_extra_transforms = [
+                    # Additional aggressive geometric augmentations
+                    A.HorizontalFlip(
+                        p=0.1
+                    ),  # Extra flip probability (total becomes ~0.55)
+                    A.RandomRotate90(p=0.1),  # Extra rotation probability
+                    A.Rotate(limit=25, p=0.2),  # Stronger rotation
+                    A.ShiftScaleRotate(
+                        shift_limit=0.15, scale_limit=0.15, rotate_limit=25, p=0.2
+                    ),
+                    # Additional strong brightness/contrast
+                    A.RandomBrightnessContrast(
+                        brightness_limit=0.3, contrast_limit=0.3, p=0.2
                     ),
                     A.HueSaturationValue(
                         hue_shift_limit=15,
                         sat_shift_limit=20,
                         val_shift_limit=15,
-                        p=0.5,
+                        p=0.2,
                     ),
-                    # More blur and noise
+                    # Additional stronger blur and noise
                     A.OneOf(
                         [
                             A.Blur(blur_limit=5, p=1.0),
                             A.GaussianBlur(blur_limit=5, p=1.0),
                             A.MotionBlur(blur_limit=5, p=1.0),
                         ],
-                        p=0.4,
+                        p=0.2,
                     ),
-                    A.GaussNoise(std_range=(0.01, 0.1), p=0.4),
-                    # Aggressive cutout
+                    A.GaussNoise(std_range=(0.05, 0.1), p=0.2),
+                    # Additional aggressive cutout
                     A.CoarseDropout(
                         num_holes_range=(1, 2),
                         hole_height_range=(0.1, 0.25),
                         hole_width_range=(0.1, 0.25),
-                        p=0.5,
+                        p=0.2,
                     ),
-                    # More advanced augmentations
-                    A.RandomShadow(p=0.2),
-                    A.RandomFog(p=0.2),
-                    A.GridDistortion(p=0.2),
-                    A.ElasticTransform(p=0.2),
-                    A.CLAHE(clip_limit=3.0, p=0.2),
-                    A.ColorJitter(p=0.3),
-                    A.Posterize(p=0.2),
-                    A.Equalize(p=0.2),
+                    # Additional advanced augmentations
+                    A.RandomShadow(p=0.1),
+                    A.RandomFog(p=0.1),
+                    A.GridDistortion(p=0.1),
+                    A.ElasticTransform(p=0.1),
+                    A.CLAHE(clip_limit=3.0, p=0.1),
+                    A.ColorJitter(p=0.1),
+                    A.Posterize(p=0.1),
+                    A.Equalize(p=0.1),
                 ]
+
+                augmentation_transforms = medium_transforms + heavy_extra_transforms
             else:  # medium (default)
                 augmentation_transforms = [
                     # Geometric augmentations

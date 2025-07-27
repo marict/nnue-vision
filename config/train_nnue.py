@@ -13,7 +13,7 @@ num_ls_buckets = 8  # Standard bucket count
 visual_threshold = 0.0
 
 # Dataset and model settings
-batch_size = 32  # GPU-friendly
+batch_size = 512  # GPU-friendly
 num_workers = 4  # Reasonable parallelism
 input_size = (96, 96)  # Standard input size
 num_classes = 10  # CIFAR-10 classes
@@ -25,7 +25,7 @@ use_augmentation = True  # Enable strong data augmentation to prevent overfittin
 augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
 
 # Training settings
-max_epochs = 50  # Longer than local dev, shorter than full runs
+max_epochs = 500
 patience = 10  # Early-stopping patience
 save_top_k = 3  # Keep best checkpoints
 
