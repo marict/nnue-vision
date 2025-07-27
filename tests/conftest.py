@@ -46,6 +46,23 @@ from data import GenericVisionDataset, create_data_loaders
 from model import NNUE, GridFeatureSet, LossParams
 
 
+class DummyArtifact:
+    """Mock wandb artifact for testing."""
+
+    def __init__(self, name, type=None):
+        self.name = name
+        self.type = type
+
+    def add_file(self, path):
+        pass
+
+    def __getattr__(self, item):
+        def _dummy(*args, **kwargs):
+            return None
+
+        return _dummy
+
+
 class DummyWandbLogger:
     """Minimal stub for Lightning's WandbLogger used in tests."""
 
@@ -75,6 +92,15 @@ class DummyWandbLogger:
 
     def save(self):
         pass
+
+    def log(self, *args, **kwargs):
+        pass
+
+    def log_artifact(self, *args, **kwargs):
+        pass
+
+    def Artifact(self, name, type=None):
+        return DummyArtifact(name, type)
 
     # Gracefully handle any other method/attribute requests
     def __getattr__(self, item):

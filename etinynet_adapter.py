@@ -172,7 +172,7 @@ class EtinyNetAdapter(ModelAdapter):
 
     def get_run_name(self, config: Any) -> str:
         """Generate a run name for wandb using RunPod ID when available."""
-        return generate_run_name(config)
+        return generate_run_name("etinynet", config.name)
 
     def log_sample_predictions(
         self,

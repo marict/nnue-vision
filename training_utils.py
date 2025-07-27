@@ -163,7 +163,7 @@ def log_git_commit_info() -> None:
     if git_info:
         early_log(f"📝 Git commit: {git_info['commit_hash'][:8]}")
         early_log(f"🌿 Branch: {git_info['branch']}")
-        if git_info["error"]:
+        if git_info.get("error"):
             early_log("⚠️  Git command failed")
     else:
         early_log("❌ Git information not available")

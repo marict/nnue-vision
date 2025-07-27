@@ -202,7 +202,7 @@ class NNUEAdapter(ModelAdapter):
 
     def get_run_name(self, config: Any) -> str:
         """Generate a run name for wandb using RunPod ID when available."""
-        return generate_run_name(config)
+        return generate_run_name("nnue", config.name)
 
     def create_model(self, config: Any) -> pl.LightningModule:
         """Create and return the NNUE model instance."""
