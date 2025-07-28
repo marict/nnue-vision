@@ -41,18 +41,13 @@ log_dir="/runpod-volume/nnue-vision-logs"
 mkdir -p "$log_dir/checkpoints"
 [[ -L lightning_logs ]] || { rm -rf lightning_logs 2>/dev/null || true; ln -sf "$log_dir" lightning_logs; }
 
-# Process arguments and check for keep-alive
-keep_alive_enabled=false
-filtered_args=()
-for arg in "$@"; do
-    [[ "$arg" == "--keep-alive" ]] && keep_alive_enabled=true || filtered_args+=("$arg")
-done
+# Process arguments
+filtered_args=("$@")
 [[ "${filtered_args[*]}" == *"--log_dir"* ]] || filtered_args+=("--log_dir=$log_dir")
 
 # Check WANDB_API_KEY
 [[ -n "${WANDB_API_KEY:-}" ]] || {
     log "ERROR: WANDB_API_KEY environment variable is not set"
-    [[ "$keep_alive_enabled" == "true" ]] && { log "keeping alive despite error"; exec tail -f /dev/null; }
     exit 1
 }
 
@@ -62,16 +57,6 @@ log "starting training -> $log_file"
 training_exit_code=0
 python -u "${filtered_args[@]}" 2>&1 | tee "$log_file" || training_exit_code=$?
 
-# Log result and save model
-[[ $training_exit_code -eq 0 ]] && log "training completed successfully" || log "training failed (exit code: $training_exit_code)"
-[[ -f visual_wake_words_model.pt ]] && { cp visual_wake_words_model.pt /runpod-volume/; log "model saved to /runpod-volume/"; }
-
-# Keep-alive if requested
-if [[ "$keep_alive_enabled" == "true" ]]; then
-    log "keep-alive enabled - container will run indefinitely"
-    log "files saved to /runpod-volume/ - use 'docker stop' or terminate pod to exit"
-    while true; do sleep 300; log "heartbeat"; done
-fi
-
-# Exit with training result if no keep-alive
-exit $training_exit_code 
+# Keep container alive indefinitely - it's up to the code to kill runpod
+log "keeping container alive indefinitely"
+tail -f /dev/null

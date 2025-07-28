@@ -567,8 +567,19 @@ class EtinyNet(pl.LightningModule):
         outputs = self(images)
         loss = nn.functional.cross_entropy(outputs, targets)
 
-        # Log metrics
-        self.log("train_loss", loss, prog_bar=True)
+        # Calculate accuracy for training
+        _, predicted = torch.max(outputs.data, 1)
+        accuracy = (predicted == targets).sum().item() / targets.size(0)
+
+        # Log metrics to both console and wandb
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_acc", accuracy, prog_bar=True, on_step=True, on_epoch=True)
+
+        # Log learning rate
+        if self.trainer.optimizers:
+            lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+            self.log("learning_rate", lr, on_step=True, on_epoch=False)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -1220,9 +1231,24 @@ class NNUE(pl.LightningModule):
             loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
         loss = loss.mean()
 
-        # Only log if trainer is available (prevents warnings during testing)
+        # Enhanced logging with additional metrics
         if hasattr(self, "_trainer") and self._trainer is not None:
-            self.log(loss_type, loss)
+            # Basic loss logging
+            self.log(loss_type, loss, prog_bar=True, on_step=True, on_epoch=True)
+
+            # Log additional metrics for training steps
+            if loss_type == "train_loss":
+                # Log learning rate
+                if self.trainer.optimizers:
+                    lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+                    self.log("learning_rate", lr, on_step=True, on_epoch=False)
+
+                # Log lambda progression
+                self.log("lambda_blend", actual_lambda, on_step=True, on_epoch=True)
+
+                # Log score statistics
+                self.log("score_mean", scorenet.mean(), on_step=True, on_epoch=True)
+                self.log("target_mean", targets.mean(), on_step=True, on_epoch=True)
 
         return loss
 

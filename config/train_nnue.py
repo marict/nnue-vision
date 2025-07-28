@@ -43,7 +43,8 @@ enable_progress_bar = True
 check_val_every_n_epoch = 1
 
 # RunPod settings
-keep_alive = False  # Don't keep RunPod instances alive after training
+keep_alive = False  # Terminate RunPod instance after training completes
+
 
 # Logging backends
 log_dir = "logs"

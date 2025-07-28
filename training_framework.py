@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytorch_lightning as pl
+import runpod
 import torch
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
@@ -106,110 +107,6 @@ class ModelAdapter(ABC):
         if hasattr(config, "note") and config.note:
             run_name += f"-{config.note}"
         return run_name
-
-
-class CompactProgressLogger(Callback):
-    """Custom callback for compact iteration-based logging."""
-
-    def __init__(self):
-        super().__init__()
-        self.step_start_time = None
-        self.iter_count = 0
-
-    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
-        """Record timing for each batch."""
-        self.step_start_time = time.time()
-
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        """Log compact training metrics after each batch."""
-        self.iter_count += 1
-
-        # Calculate timing
-        step_time_ms = 0.0
-        if self.step_start_time is not None:
-            step_time_ms = (time.time() - self.step_start_time) * 1000
-
-        # Get loss and learning rate
-        loss = outputs["loss"].item() if isinstance(outputs, dict) else outputs.item()
-        lr = trainer.optimizers[0].param_groups[0]["lr"] if trainer.optimizers else 0.0
-
-        # Calculate gradient norm
-        grad_norm = 0.0
-        for param in pl_module.parameters():
-            if param.grad is not None:
-                grad_norm += param.grad.data.norm(2).item() ** 2
-        grad_norm = grad_norm**0.5
-
-        # Memory usage
-        memory_info = ""
-        if torch.cuda.is_available():
-            memory_gb = torch.cuda.memory_allocated() / (1024**3)
-            memory_info = f", mem {memory_gb:.2f}GB"
-
-        # Print compact log
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp}")
-        print(
-            f"iter {self.iter_count}: loss {loss:.4f}, grad_norm {grad_norm:.4f}"
-            f"{memory_info}, time {step_time_ms:.2f}ms"
-        )
-
-        # Log to W&B
-        if (
-            trainer.logger
-            and hasattr(trainer.logger, "experiment")
-            and hasattr(trainer.logger.experiment, "log")
-        ):
-            wandb_metrics = {
-                "train/lr": lr,
-                "train/grad_norm": grad_norm,
-                "train/step_time_ms": step_time_ms,
-                "train/iter": self.iter_count,
-            }
-            if torch.cuda.is_available():
-                wandb_metrics["train/memory_gb"] = memory_gb
-            trainer.logger.experiment.log(wandb_metrics)
-
-    def on_validation_epoch_end(self, trainer, pl_module):
-        """Log validation results."""
-        val_metrics = {}
-        for key, value in trainer.logged_metrics.items():
-            if "val" in key and isinstance(value, torch.Tensor):
-                metric_name = key.replace("val_", "").replace("val/", "")
-                val_metrics[metric_name] = value.item()
-
-        # Print validation summary
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp}")
-
-        val_loss = val_metrics.get("loss", 0.0)
-        val_acc = val_metrics.get("acc", 0.0)
-        val_f1 = val_metrics.get("f1", 0.0)
-
-        print(f"Validation: loss {val_loss:.4f}, acc {val_acc:.4f}, f1 {val_f1:.4f}")
-
-        # Log to W&B
-        if (
-            trainer.logger
-            and hasattr(trainer.logger, "experiment")
-            and hasattr(trainer.logger.experiment, "log")
-        ):
-            wandb_val_metrics = {"validation/epoch": trainer.current_epoch}
-            for key, value in val_metrics.items():
-                wandb_val_metrics[f"validation/{key}"] = value
-            trainer.logger.experiment.log(wandb_val_metrics)
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        """Log epoch completion."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp}")
-        print(f"Epoch {trainer.current_epoch + 1} completed")
-
-    def on_train_end(self, trainer, pl_module):
-        """Log training completion."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp}")
-        print("Training completed!")
 
 
 class BaseTrainer:
@@ -340,7 +237,7 @@ class BaseTrainer:
         if wandb_run_id:
             early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
             wandb_kwargs["id"] = wandb_run_id
-            wandb_kwargs["resume"] = "must"  # Force resume of existing run
+            wandb_kwargs["resume"] = "allow"  # Allow resume or create with same ID
         else:
             run_name = self.adapter.get_run_name(config)
             wandb_kwargs["name"] = run_name
@@ -363,7 +260,7 @@ class BaseTrainer:
             callbacks=callbacks,
             log_every_n_steps=getattr(config, "log_interval", 50),
             enable_checkpointing=getattr(config, "always_save_checkpoint", True),
-            enable_progress_bar=False,
+            enable_progress_bar=True,  # Enable progress bar for console output
             deterministic=getattr(config, "deterministic", True),
             check_val_every_n_epoch=getattr(config, "check_val_every_n_epoch", 1),
         )
@@ -450,7 +347,6 @@ class BaseTrainer:
                     patience=getattr(config, "patience", 10),
                     verbose=True,
                 ),
-                CompactProgressLogger(),
             ]
 
             # Add model-specific callbacks
@@ -522,12 +418,17 @@ class BaseTrainer:
             print("🎯 Training metrics and git info logged to W&B")
             wandb.finish()
 
-            # Stop RunPod instance if needed
-            if os.getenv("RUNPOD_POD_ID") and not getattr(config, "keep_alive", False):
+            # Stop RunPod instance if keep_alive is False
+            if not getattr(config, "keep_alive", False):
                 try:
-                    runpod_service_nnue.stop_runpod()
-                except ImportError:
-                    pass
+                    pod_id = os.getenv("RUNPOD_POD_ID")
+                    early_log(
+                        f"🔄 Terminating RunPod instance {pod_id} (keep_alive=False)"
+                    )
+                    runpod.terminate_pod(pod_id)
+                    early_log("✅ RunPod instance terminated successfully")
+                except Exception as e:
+                    early_log(f"⚠️  Failed to terminate RunPod instance: {e}")
 
             return 0
 

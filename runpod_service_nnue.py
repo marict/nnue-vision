@@ -49,10 +49,10 @@ NNUE Training (Neural Network Efficiently Updatable):
 For chess/game engine evaluation networks:
 
     # Basic NNUE training with default config
-    python runpod_service_nnue.py train --keep-alive --note "nnue-experiment" -- nnue --config config/train_nnue_default.py
+    python runpod_service_nnue.py train --note "nnue-experiment" -- nnue --config config/train_nnue_default.py
 
     # NNUE with custom parameters
-    python runpod_service_nnue.py train --keep-alive --note "nnue-custom" -- nnue --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
+    python runpod_service_nnue.py train --note "nnue-custom" -- nnue --config config/train_nnue_default.py --max_epochs 100 --batch_size 32
 
     # Quick test run
     python runpod_service_nnue.py train -- nnue --config config/train_nnue_default.py --max_epochs 5
@@ -62,10 +62,10 @@ EtinyNet Training (Efficient Tiny Networks):
 For standard computer vision tasks (CIFAR-10/100):
 
     # Basic EtinyNet training
-    python runpod_service_nnue.py train --keep-alive --note "etinynet-experiment" -- etinynet --config config/train_etinynet_default.py
+    python runpod_service_nnue.py train --note "etinynet-experiment" -- etinynet --config config/train_etinynet_default.py
 
     # EtinyNet with custom parameters  
-    python runpod_service_nnue.py train --keep-alive --note "etinynet-custom" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --batch_size 64
+    python runpod_service_nnue.py train --note "etinynet-custom" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --batch_size 64
 
     # Quick test run
     python runpod_service_nnue.py train -- etinynet --config config/train_etinynet_default.py --max_epochs 5
@@ -73,23 +73,22 @@ For standard computer vision tasks (CIFAR-10/100):
 Common Options:
 --------------
     --gpu-type "NVIDIA RTX 6000 Ada Generation"  # Choose GPU type
-    --keep-alive                                  # Keep pod running after training
     --note "my experiment description"            # Add note to W&B run
 
 Example Commands:
 ----------------
     # NNUE training with specific GPU and note
-    python runpod_service_nnue.py train --gpu-type "NVIDIA A100 80GB PCIe" --keep-alive --note "baseline-NNUE-experiment" -- nnue --config config/train_nnue_default.py
+    python runpod_service_nnue.py train --gpu-type "NVIDIA A100 80GB PCIe" --note "baseline-NNUE-experiment" -- nnue --config config/train_nnue_default.py
 
     # EtinyNet training with custom settings
-    python runpod_service_nnue.py train --gpu-type "NVIDIA RTX 6000 Ada Generation" --keep-alive --note "reduced-LR-experiment" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --learning_rate 0.05
+    python runpod_service_nnue.py train --gpu-type "NVIDIA RTX 6000 Ada Generation" --note "reduced-LR-experiment" -- etinynet --config config/train_etinynet_default.py --max_epochs 200 --learning_rate 0.05
 
 Notes:
 ------
 - WANDB_API_KEY environment variable must be set
 - RUNPOD_API_KEY environment variable must be set
 - Training logs will automatically open in your browser via W&B
-- Pods auto-stop after training unless --keep-alive is used
+- Pods auto-stop after training
 """
     print(help_text)
 
@@ -182,9 +181,6 @@ def _build_training_command(
     """Build the complete training command with all flags."""
     cmd = f"{script_name} {train_args}"
 
-    # NOTE: --keep-alive is handled by container_setup.sh, not the training script
-    # The keep_alive flag is passed separately to _create_docker_script
-
     if note:
         cmd += f" --note={note}"
 
@@ -194,7 +190,7 @@ def _build_training_command(
     return cmd
 
 
-def _create_docker_script(training_command: str, keep_alive: bool = False) -> str:
+def _create_docker_script(training_command: str) -> str:
     """Create the Docker startup script for the RunPod instance.
 
     We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
@@ -221,7 +217,7 @@ def _create_docker_script(training_command: str, keep_alive: bool = False) -> st
             REPO_URL=REPO_URL
         ),
         "echo '[RUNPOD] Running container setup script...'",
-        f"bash /workspace/repo/container_setup.sh {'--keep-alive ' if keep_alive else ''}{training_command}",
+        f"bash /workspace/repo/container_setup.sh {training_command}",
     ]
 
     return " && ".join(base_commands)
@@ -232,7 +228,6 @@ def start_cloud_training(
     gpu_type: str = DEFAULT_GPU_TYPE,
     *,
     api_key: str | None = None,
-    keep_alive: bool = False,
     note: str | None = None,
     script_name: str = "train.py",
 ) -> str:
@@ -276,7 +271,7 @@ def start_cloud_training(
     training_command = _build_training_command(
         train_args, note, wandb_run_id, script_name
     )
-    docker_script = _create_docker_script(training_command, keep_alive)
+    docker_script = _create_docker_script(training_command)
     final_docker_args = _bash_c_quote(docker_script)
 
     # Debug: print the docker command being sent
@@ -438,10 +433,10 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # NNUE training
-  python runpod_service_nnue.py train --keep-alive --note "my-experiment" -- nnue --config config/train_nnue_default.py
+  python runpod_service_nnue.py train --note "my-experiment" -- nnue --config config/train_nnue_default.py
 
   # EtinyNet training  
-  python runpod_service_nnue.py train --keep-alive --note "my-experiment" -- etinynet --config config/train_etinynet_default.py
+  python runpod_service_nnue.py train --note "my-experiment" -- etinynet --config config/train_etinynet_default.py
 
   # Show detailed help
   python runpod_service_nnue.py help
@@ -462,11 +457,7 @@ For complete usage guide, run: python runpod_service.py help
     )
     t.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name")
     t.add_argument("--api-key", help="RunPod API key")
-    t.add_argument(
-        "--keep-alive",
-        action="store_true",
-        help="Keep pod alive after training completes (disables auto-stop)",
-    )
+
     t.add_argument("--note", help="Note to add to the W&B run")
     t.add_argument(
         "--script",
@@ -484,7 +475,6 @@ For complete usage guide, run: python runpod_service.py help
             train_args_str,
             gpu_type=args.gpu_type,
             api_key=args.api_key,
-            keep_alive=args.keep_alive,
             note=args.note,
             script_name=args.script,
         )

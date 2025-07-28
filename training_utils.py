@@ -322,9 +322,7 @@ def parse_args() -> argparse.ArgumentParser:
         "--use-runpod", action="store_true", help="Use RunPod for training"
     )
     parser.add_argument("--gpu-type", type=str, help="GPU type for RunPod")
-    parser.add_argument(
-        "--keep-alive", action="store_true", help="Keep instance alive after training"
-    )
+    parser.add_argument()
     return parser
 
 
