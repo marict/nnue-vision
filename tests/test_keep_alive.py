@@ -179,13 +179,12 @@ class TestKeepAliveRunPodServiceIntegration:
     """Test keep_alive integration with RunPod service."""
 
     def test_build_training_command_with_keep_alive_true(self):
-        """Test that training command includes --keep-alive flag when keep_alive is True."""
+        """Test that training command is built correctly (keep_alive handled separately)."""
         from runpod_service_nnue import _build_training_command
 
         train_args = "nnue --config config/train_nnue.py"
         command = _build_training_command(
             train_args=train_args,
-            keep_alive=True,
             note=None,
             wandb_run_id=None,
             script_name="train.py",
@@ -193,37 +192,37 @@ class TestKeepAliveRunPodServiceIntegration:
 
         assert "train.py" in command, "Command should include script name"
         assert train_args in command, "Command should include training arguments"
-        assert (
-            "--keep-alive" in command
-        ), "Command should include --keep-alive flag when keep_alive is True"
-
-    def test_build_training_command_with_keep_alive_false(self):
-        """Test that training command excludes --keep-alive flag when keep_alive is False."""
-        from runpod_service_nnue import _build_training_command
-
-        train_args = "nnue --config config/train_nnue.py"
-        command = _build_training_command(
-            train_args=train_args,
-            keep_alive=False,
-            note=None,
-            wandb_run_id=None,
-            script_name="train.py",
-        )
-
-        assert "train.py" in command, "Command should include script name"
-        assert train_args in command, "Command should include training arguments"
+        # NOTE: --keep-alive is handled by container_setup.sh, not in the training command
         assert (
             "--keep-alive" not in command
-        ), "Command should NOT include --keep-alive flag when keep_alive is False"
+        ), "keep_alive flag is handled by Docker script, not training command"
 
-    def test_build_training_command_with_all_parameters(self):
-        """Test training command building with all parameters including keep_alive."""
+    def test_build_training_command_with_keep_alive_false(self):
+        """Test that training command is built correctly (keep_alive handled separately)."""
         from runpod_service_nnue import _build_training_command
 
         train_args = "nnue --config config/train_nnue.py"
         command = _build_training_command(
             train_args=train_args,
-            keep_alive=True,
+            note=None,
+            wandb_run_id=None,
+            script_name="train.py",
+        )
+
+        assert "train.py" in command, "Command should include script name"
+        assert train_args in command, "Command should include training arguments"
+        # NOTE: --keep-alive is handled by container_setup.sh, not in the training command
+        assert (
+            "--keep-alive" not in command
+        ), "keep_alive flag is handled by Docker script, not training command"
+
+    def test_build_training_command_with_all_parameters(self):
+        """Test training command building with all parameters (keep_alive handled separately)."""
+        from runpod_service_nnue import _build_training_command
+
+        train_args = "nnue --config config/train_nnue.py"
+        command = _build_training_command(
+            train_args=train_args,
             note="test-run",
             wandb_run_id="test-wandb-123",
             script_name="train.py",
@@ -232,13 +231,20 @@ class TestKeepAliveRunPodServiceIntegration:
         expected_components = [
             "train.py",
             train_args,
-            "--keep-alive",
             "--note=test-run",
             "--wandb-run-id=test-wandb-123",
         ]
 
+        # NOTE: --keep-alive is handled by container_setup.sh, not in the training command
+        unexpected_components = ["--keep-alive"]
+
         for component in expected_components:
             assert component in command, f"Command should include {component}"
+
+        for component in unexpected_components:
+            assert (
+                component not in command
+            ), f"Command should NOT include {component} (handled by Docker script)"
 
 
 class TestKeepAliveConfigConsistency:

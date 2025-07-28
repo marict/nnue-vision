@@ -437,15 +437,15 @@ class BaseTrainer:
             # Set up callbacks
             callbacks = [
                 ModelCheckpoint(
-                    monitor="val_loss",
-                    mode="min",
-                    save_top_k=getattr(config, "save_top_k", 3),
-                    filename="best-{epoch:02d}-{val_loss:.3f}",
-                    save_last=True,
+                    monitor="val_f1",
+                    mode="max",
+                    save_top_k=1,  # Only save the best F1 score model
+                    filename="best-f1-{epoch:02d}-{val_f1:.3f}",
+                    save_last=False,  # Don't save last checkpoint
                 ),
                 EarlyStopping(
-                    monitor="val_loss",
-                    mode="min",
+                    monitor="val_f1",
+                    mode="max",
                     patience=getattr(config, "patience", 10),
                     verbose=True,
                 ),
@@ -492,9 +492,9 @@ class BaseTrainer:
             final_model_path = self.adapter.save_final_model(model, config, log_dir)
             print(f"Final model saved to: {final_model_path}")
 
-            # Save model as wandb artifact
+            # Save best F1 model as wandb artifact
             try:
-                artifact = wandb.Artifact("final_model", type="model")
+                artifact = wandb.Artifact("best_f1_model", type="model")
                 artifact.add_file(str(final_model_path))
                 wandb.log_artifact(artifact)
             except Exception:

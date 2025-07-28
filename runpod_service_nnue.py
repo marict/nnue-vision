@@ -274,7 +274,7 @@ def start_cloud_training(
 
     # Build training command (wandb_run_id guaranteed because WANDB_API_KEY is required)
     training_command = _build_training_command(
-        train_args, keep_alive, note, wandb_run_id, script_name
+        train_args, note, wandb_run_id, script_name
     )
     docker_script = _create_docker_script(training_command, keep_alive)
     final_docker_args = _bash_c_quote(docker_script)
