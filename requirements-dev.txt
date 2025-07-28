@@ -1,11 +1,10 @@
 # Development and production dependencies for NNUE-Vision
 
 # Core production dependencies
-numpy<2  # Pin to 1.x for PyTorch Lightning compatibility
+numpy<2
 matplotlib
 numba
 requests
-pytorch-lightning
 pillow
 wandb
 seaborn

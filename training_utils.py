@@ -8,6 +8,7 @@ import runpy
 import shutil
 import string
 import subprocess
+import tempfile
 import time
 from ast import literal_eval
 from dataclasses import dataclass
@@ -84,75 +85,52 @@ def get_git_info() -> dict[str, str]:
     git_info["cwd"] = cwd
     git_info["git_exists"] = str(os.path.exists(".git"))
 
-    try:
-        # Get current commit hash
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        git_info["commit_hash"] = result.stdout.strip()
+    # Get current commit hash
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    git_info["commit_hash"] = result.stdout.strip()
 
-        # Get current branch
-        try:
-            branch_result = subprocess.run(
-                ["git", "branch", "--show-current"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=5,
-            )
-            branch = branch_result.stdout.strip()
-            if not branch:  # Detached HEAD state
-                branch = "detached"
-        except subprocess.CalledProcessError:
-            branch = "unknown"
+    # Get current branch
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    branch = branch_result.stdout.strip()
+    if not branch:  # Detached HEAD state
+        branch = "detached"
 
-        git_info["branch"] = branch
+    git_info["branch"] = branch
 
-        # Get short commit message (first line only, limit to 120 chars)
-        try:
-            msg_result = subprocess.run(
-                ["git", "log", "-1", "--format=%s"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=5,
-            )
-            commit_msg = msg_result.stdout.strip()[:120]
-            if len(msg_result.stdout.strip()) > 120:
-                commit_msg += "..."
-            git_info["commit_message"] = commit_msg
-        except subprocess.CalledProcessError:
-            git_info["commit_message"] = "no message"
+    # Get short commit message (first line only, limit to 120 chars)
+    msg_result = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    commit_msg = msg_result.stdout.strip()[:120]
+    if len(msg_result.stdout.strip()) > 120:
+        commit_msg += "..."
+    git_info["commit_message"] = commit_msg
 
-        # Get git remote URL if available
-        try:
-            remote_result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=5,
-            )
-            git_info["remote_url"] = remote_result.stdout.strip()
-        except subprocess.CalledProcessError:
-            git_info["remote_url"] = "no remote"
-
-    except subprocess.CalledProcessError as e:
-        git_info["error"] = f"Git command failed: {e}"
-        if e.stderr:
-            git_info["error_output"] = e.stderr
-    except FileNotFoundError:
-        git_info["error"] = (
-            "Git command not found - git is not installed or not in PATH"
-        )
-    except subprocess.TimeoutExpired:
-        git_info["error"] = "Git command timed out"
-    except Exception as e:
-        git_info["error"] = f"Unexpected error getting git info: {e}"
+    # Get git remote URL if available
+    remote_result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    git_info["remote_url"] = remote_result.stdout.strip()
 
     return git_info
 
@@ -167,19 +145,6 @@ def log_git_commit_info() -> None:
             early_log("⚠️  Git command failed")
     else:
         early_log("❌ Git information not available")
-
-
-def log_git_info_to_wandb(wandb_run) -> None:
-    """Log git information to W&B run."""
-    git_info = get_git_info()
-    if git_info and wandb_run:
-        wandb_run.config.update(
-            {
-                "git_commit": git_info["commit_hash"],
-                "git_branch": git_info["branch"],
-                "git_dirty": False,  # No direct 'dirty' field in get_git_info, so set to False
-            }
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -219,9 +184,6 @@ def cleanup_disk_space_emergency() -> None:
             torch.cuda.empty_cache()
             early_log("🗑️  Cleared CUDA cache")
 
-        # Clean up temp directories
-        import tempfile
-
         temp_dir = Path(tempfile.gettempdir())
         if temp_dir.exists():
             # Only clean our own temp files to be safe
@@ -237,6 +199,7 @@ def cleanup_disk_space_emergency() -> None:
 
     except Exception as e:
         early_log(f"❌ Emergency cleanup failed: {e}")
+        raise e
 
 
 # --------------------------------------------------------------------------- #
@@ -266,8 +229,6 @@ def generate_run_name(
             parts.append(note_clean)
 
     if timestamp:
-        import time
-
         time_str = time.strftime("%m%d-%H%M")
         parts.append(time_str)
 

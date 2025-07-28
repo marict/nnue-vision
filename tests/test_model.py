@@ -174,54 +174,6 @@ class TestNNUEForward:
             assert_model_output_valid(output, batch_size)
 
 
-class TestNNUETraining:
-    """Test NNUE training functionality."""
-
-    def test_training_step_basic(self, tiny_nnue_model, tiny_image_batch, device):
-        """Test basic training step."""
-        model = tiny_nnue_model
-        model.to(device)
-        model.train()
-
-        batch = tiny_image_batch
-
-        # Test training step
-        loss = model.training_step(batch, 0)
-
-        assert isinstance(loss, torch.Tensor)
-        assert loss.numel() == 1
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
-
-    def test_validation_step_basic(self, tiny_nnue_model, tiny_image_batch, device):
-        """Test basic validation step."""
-        model = tiny_nnue_model
-        model.to(device)
-        model.eval()
-
-        batch = tiny_image_batch
-
-        # Test validation step
-        loss = model.validation_step(batch, 0)
-
-        assert isinstance(loss, torch.Tensor)
-        assert loss.numel() == 1
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
-
-    def test_configure_optimizers(self, tiny_nnue_model):
-        """Test optimizer configuration."""
-        model = tiny_nnue_model
-
-        result = model.configure_optimizers()
-
-        # Returns tuple of (optimizers, schedulers)
-        assert isinstance(result, (list, tuple))
-        optimizers, schedulers = result
-        assert len(optimizers) >= 1
-        assert hasattr(optimizers[0], "param_groups")
-
-
 class TestNNUESparsityPerformance:
     """Test NNUE sparsity performance and serialization."""
 

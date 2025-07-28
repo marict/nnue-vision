@@ -185,9 +185,6 @@ def nnue_model():
         l1_size=128,  # Much smaller than new default 1024
         l2_size=8,  # Smaller than default 15
         l3_size=16,  # Smaller than default 32
-        max_epoch=10,
-        num_batches_per_epoch=100,
-        lr=1e-3,
         num_ls_buckets=2,  # Smaller for testing
     )
 
@@ -201,9 +198,6 @@ def small_nnue_model():
         l1_size=64,  # Very small
         l2_size=4,  # Tiny
         l3_size=8,  # Tiny
-        max_epoch=5,
-        num_batches_per_epoch=10,
-        lr=1e-3,
         num_ls_buckets=2,
     )
 
@@ -217,9 +211,6 @@ def tiny_nnue_model():
         l1_size=32,  # Minimal
         l2_size=4,  # Minimal
         l3_size=4,  # Minimal
-        max_epoch=2,
-        num_batches_per_epoch=5,
-        lr=1e-3,
         num_ls_buckets=2,
     )
 

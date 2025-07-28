@@ -124,11 +124,9 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
 
     # Write dconv1 weights (first depthwise conv)
     dw1_weight = layer_data["depthwise_weight"]
-    dw1_weight_count = dw1_weight.shape[0] * 9  # 3x3 kernel
     f.write(dw1_weight.cpu().numpy().astype("i1").tobytes())
 
     # Write pconv weights (first pointwise conv)
-    pw_weight_count = mid_channels * in_channels
     f.write(pw_weight.cpu().numpy().astype("i1").tobytes())
 
     # Write pconv biases
@@ -138,12 +136,10 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
 
     # Write dconv2 weights (second depthwise conv)
     dw2_weight = layer_data["depthwise2_weight"]
-    dw2_weight_count = mid_channels * 9  # 3x3 kernel
     f.write(dw2_weight.cpu().numpy().astype("i1").tobytes())
 
     # Write pconv_out weights (final pointwise conv)
     pw_out_weight = layer_data["pointwise_out_weight"]
-    pw_out_weight_count = out_channels * mid_channels
     f.write(pw_out_weight.cpu().numpy().astype("i1").tobytes())
 
     # Write pconv_out biases
@@ -517,14 +513,6 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
         num_ls_buckets=num_ls_buckets,
     )
 
-    # Handle Lightning checkpoints by removing the 'nnue.' prefix
-    if any(key.startswith("nnue.") for key in state_dict.keys()):
-        state_dict = {
-            k.replace("nnue.", ""): v
-            for k, v in state_dict.items()
-            if k.startswith("nnue.")
-        }
-
     model.load_state_dict(state_dict)
 
     return model
@@ -576,8 +564,9 @@ def detect_model_type(checkpoint_path: Path) -> str:
             if indicator in key:
                 return "nnue"
 
-    # Default to NNUE if unclear
-    return "nnue"
+    raise ValueError(
+        f"Could not determine model type from checkpoint: {checkpoint_path}"
+    )
 
 
 def load_etinynet_from_checkpoint(checkpoint_path: Path) -> EtinyNet:
@@ -657,27 +646,24 @@ def infer_architecture_from_state_dict(
 ) -> tuple[GridFeatureSet, int, int, int, int]:
     """Infer model architecture from state dict tensor shapes."""
 
-    # Handle Lightning checkpoints with 'nnue.' prefix
-    prefix = ""
-    if "nnue.input.weight" in state_dict:
-        prefix = "nnue."
-    elif "input.weight" not in state_dict:
+    # Check for required NNUE model weights
+    if "input.weight" not in state_dict:
         raise ValueError(
             "Cannot find NNUE model weights in state dict. Available keys: "
             + str(list(state_dict.keys())[:10])
         )
 
     # Get input layer weight shape to determine feature set and L1
-    input_weight_shape = state_dict[f"{prefix}input.weight"].shape
+    input_weight_shape = state_dict["input.weight"].shape
     num_features = input_weight_shape[0]  # [num_features, L1]
     l1_size = input_weight_shape[1]
 
     # Infer number of layer stack buckets from output layer shape FIRST
-    output_weight_shape = state_dict[f"{prefix}layer_stacks.output.weight"].shape
+    output_weight_shape = state_dict["layer_stacks.output.weight"].shape
     num_ls_buckets = output_weight_shape[0]  # [num_buckets, L3]
 
     # Infer grid size and features per square from conv layer
-    conv_weight_shape = state_dict[f"{prefix}conv.weight"].shape
+    conv_weight_shape = state_dict["conv.weight"].shape
     conv_out_channels = conv_weight_shape[0]  # This should match features_per_square
 
     # Calculate grid size from total features and conv output channels
@@ -706,14 +692,14 @@ def infer_architecture_from_state_dict(
 
     # Infer L2 and L3 sizes from layer stack shapes
     # L2 size from l1_fact layer: l1_fact has shape [L2+1, L1]
-    l1_fact_weight_shape = state_dict[f"{prefix}layer_stacks.l1_fact.weight"].shape
+    l1_fact_weight_shape = state_dict["layer_stacks.l1_fact.weight"].shape
     l2_size = l1_fact_weight_shape[0] - 1  # Remove the +1 from factorization
 
     # L3 size from output layer: output has shape [num_buckets, L3]
     l3_size = output_weight_shape[1]  # L3 size
 
     # Verify with L2 layer shape (should be [L3 * num_buckets, L2 * 2])
-    l2_weight_shape = state_dict[f"{prefix}layer_stacks.l2.weight"].shape
+    l2_weight_shape = state_dict["layer_stacks.l2.weight"].shape
     expected_l2_input_size = l2_size * 2  # Due to squared concatenation
     expected_l2_output_size = l3_size * num_ls_buckets
 
@@ -721,9 +707,7 @@ def infer_architecture_from_state_dict(
         l2_weight_shape[0] != expected_l2_output_size
         or l2_weight_shape[1] != expected_l2_input_size
     ):
-        # Fall back to inferring from L2 layer directly
-        l3_size = l2_weight_shape[0] // num_ls_buckets
-        l2_size = l2_weight_shape[1] // 2  # Account for squared concatenation
+        raise ValueError(f"Invalid L2 layer shape: {l2_weight_shape}")
 
     return feature_set, l1_size, l2_size, l3_size, num_ls_buckets
 
