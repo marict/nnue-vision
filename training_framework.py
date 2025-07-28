@@ -340,6 +340,7 @@ class BaseTrainer:
         if wandb_run_id:
             early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
             wandb_kwargs["id"] = wandb_run_id
+            wandb_kwargs["resume"] = "must"  # Force resume of existing run
         else:
             run_name = self.adapter.get_run_name(config)
             wandb_kwargs["name"] = run_name
