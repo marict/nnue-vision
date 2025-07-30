@@ -2,184 +2,62 @@ import argparse
 import os
 import re
 import shlex
-import subprocess
 
-import requests
 import runpod
 from graphql.language.print_string import print_string
 
 import wandb
 from config import load_config
 
-# Available GPU types for RunPod:
-# - NVIDIA A40, A100 80GB PCIe, A100-SXM4-80GB, B200
-# - NVIDIA H100 PCIe, H100 80GB HBM3, H100 NVL, H200
-# - NVIDIA L40, L40S, RTX 6000 Ada Generation, RTX A6000
-# - NVIDIA RTX PRO 6000 Blackwell Workstation Edition
-
-
 DEFAULT_GPU_TYPE = "NVIDIA RTX 2000 Ada Generation"
 REPO_URL = "https://github.com/marict/nnue-vision.git"
 
 
-def _bash_c_quote(script: str) -> str:
-    """Return a *bash -c* command where *script* is properly escaped for GraphQL.
-
-    The RunPod library embeds docker_args directly into a GraphQL mutation using an f-string:
-    f'dockerArgs: "{docker_args}"'
-
-    We use GraphQL's official print_string utility to handle all escape sequences.
-    """
-    # For bash -c, the script needs to be a quoted argument
-    # Use shlex.quote to properly handle any quotes/escapes in the script
-    command = f"bash -c {shlex.quote(script)}"
-    # print_string returns the string wrapped in quotes and properly escaped
-    return print_string(command)[1:-1]  # Remove the outer quotes since RunPod adds them
-
-
-def print_training_help():
-    """Print comprehensive help for running different types of training jobs."""
-    help_text = """
-NNUE-Vision Training Guide
-==========================
-
-This tool launches GPU training jobs on RunPod for both NNUE and EtinyNet models.
-
-Notes:
-------
-- WANDB_API_KEY environment variable must be set
-- RUNPOD_API_KEY environment variable must be set
-- Training logs will automatically open in your browser via W&B
-- Pods auto-stop after training
-"""
-    print(help_text)
-
-
 class RunPodError(Exception):
-    """Custom exception for RunPod operations."""
+    pass
 
 
-def _validate_note(note: str) -> None:
-    """Validate note contains only safe characters."""
-    if not note:
-        return
-
-    # Remove spaces from allowed characters since they cause GraphQL issues
-    invalid_chars = re.findall(r"[^A-Za-z0-9_-]", note)
-    if invalid_chars:
-        unique_invalid = sorted(set(invalid_chars))
-        raise ValueError(
-            f"Note contains invalid characters: {unique_invalid}. "
-            "Only letters, numbers, hyphens, and underscores are allowed."
-        )
-
-
-def _check_git_status() -> None:
-    """Check for uncommitted git changes and fail if any are found."""
-    # Check if we're in a git repository
-    subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=5,
-    )
-
-    try:
-        # Get git status
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
-
-        if result.stdout.strip():
-            print("❌ Uncommitted changes detected!")
-            raise RunPodError("Uncommitted changes detected!")
-
-    except subprocess.CalledProcessError:
-        raise RunPodError("Failed to check git status")
-    except subprocess.TimeoutExpired:
-        raise RunPodError("Git status check timed out")
+def _bash_c_quote(script: str) -> str:
+    """Escape script for GraphQL."""
+    command = f"bash -c {shlex.quote(script)}"
+    return print_string(command)[1:-1]
 
 
 def _resolve_gpu_id(gpu_type: str) -> str:
-    """Return the GPU id for ``gpu_type`` which may be a name or id."""
+    """Return GPU id for given type."""
     try:
         gpus = runpod.get_gpus()
-    except Exception as exc:  # pragma: no cover - network errors
+        for gpu in gpus:
+            if gpu_type in {gpu.get("id"), gpu.get("displayName")}:
+                return gpu["id"]
+        raise RunPodError(f"GPU type '{gpu_type}' not found")
+    except Exception as exc:
         raise RunPodError(f"Failed to list GPUs: {exc}") from exc
-
-    for gpu in gpus:
-        if gpu_type in {gpu.get("id"), gpu.get("displayName")}:
-            return gpu["id"]
-    raise RunPodError(f"GPU type '{gpu_type}' not found")
 
 
 def _extract_project_name_from_config(
     config_path: str, model_type: str = "nnue"
 ) -> str:
-    """Extract the project name from config file, matching training framework logic."""
+    """Extract project name from config file."""
     try:
         config = load_config(config_path)
         return getattr(config, "project_name", f"{model_type}_training")
     except Exception:
-        # Fallback if config loading fails
         print(f"Warning: failed to load config from {config_path}")
         raise
 
 
-def _build_training_command(
-    train_args: str,
-    note: str | None,
-    wandb_run_id: str | None,
-    script_name: str = "train.py",
-) -> str:
-    """Build the complete training command with all flags."""
-    cmd = f"{script_name} {train_args}"
-
-    if note:
-        cmd += f" --note={note}"
-
-    if wandb_run_id:
-        cmd += f" --wandb-run-id={wandb_run_id}"
-
-    return cmd
-
-
 def _create_docker_script(training_command: str) -> str:
-    """Create the Docker startup script for the RunPod instance.
-
-    We *must* remove any NVIDIA/CUDA APT sources **before** the first `apt-get update`
-    to avoid hash-mismatch errors when NVIDIA's mirror is out of sync.  Doing this
-    inline keeps the logic self-contained and ensures the container setup script will
-    run even if the base image ships with CUDA repos enabled.
-    """
-
-    # 0) Clean up NVIDIA/CUDA sources so the subsequent update succeeds
-    nvidia_repo_cleanup = "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list || true"
-
-    # 1) Standard system preparatory commands
-    base_commands = [
-        "echo '[RUNPOD] Starting container setup...'",
-        "echo '[RUNPOD] Cleaning up NVIDIA/CUDA APT sources...'",
-        nvidia_repo_cleanup,
-        "echo '[RUNPOD] Updating package lists and installing git...'",
-        # After cleanup, refresh package lists and install git
+    """Create Docker startup script."""
+    commands = [
+        "echo '[RUNPOD] Starting setup...'",
+        "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list || true",
         "apt-get update -y && apt-get install -y git",
-        "echo '[RUNPOD] Changing to workspace directory...'",
         "cd /workspace",
-        "echo '[RUNPOD] Cloning or updating repository...'",
-        "( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )".format(
-            REPO_URL=REPO_URL
-        ),
-        "echo '[RUNPOD] Running container setup script...'",
+        f"( [ -d repo/.git ] && git -C repo pull || git clone {REPO_URL} repo )",
         f"bash /workspace/repo/container_setup.sh {training_command}",
     ]
-
-    return " && ".join(base_commands)
+    return " && ".join(commands)
 
 
 def start_cloud_training(
@@ -190,55 +68,61 @@ def start_cloud_training(
     note: str | None = None,
     script_name: str = "train.py",
 ) -> str:
-    """Launch a RunPod GPU instance and run NNUE-Vision training automatically."""
+    """Launch RunPod GPU instance for NNUE-Vision training."""
 
-    # Validate inputs
-    _validate_note(note)
-
-    # Check for uncommitted git changes
-    _check_git_status()
-
-    # Require WANDB_API_KEY so that a W&B run (and run_id) is always available
-    if not os.getenv("WANDB_API_KEY"):
-        raise RunPodError(
-            "WANDB_API_KEY environment variable must be set when launching training through runpod_service."
+    # Validate note
+    if note and re.findall(r"[^A-Za-z0-9_-]", note):
+        raise ValueError(
+            "Note contains invalid characters. Only letters, numbers, hyphens, and underscores allowed."
         )
+
+    # Check environment
+    if not os.getenv("WANDB_API_KEY"):
+        raise RunPodError("WANDB_API_KEY environment variable must be set")
 
     # Set up RunPod API
-    runpod.api_key = (
-        api_key or os.getenv("RUNPOD_API_KEY") or getattr(runpod, "api_key", None)
-    )
+    runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY")
     if not runpod.api_key:
         raise RunPodError(
-            "RunPod API key is required. Provide via --api-key or set RUNPOD_API_KEY"
+            "RunPod API key required. Set RUNPOD_API_KEY or use --api-key"
         )
 
-    # Extract project name from config file
-    # First argument should be the config path
-    config_path = (
-        train_args.split()[0] if train_args.split() else "config/train_nnue_default.py"
-    )
-    pod_name = _extract_project_name_from_config(config_path, "nnue")
-    project_name = pod_name
+    # Parse training arguments
+    args_list = train_args.split() if train_args else []
+    config_path = "config/train_nnue_default.py"
+    model_type = "nnue"
 
-    # ------------------------------------------------------------------ #
-    # 1. Create a local W&B run FIRST to obtain run_id
-    # ------------------------------------------------------------------ #
+    if args_list:
+        model_type = args_list[0]
+        try:
+            config_index = args_list.index("--config")
+            if config_index + 1 < len(args_list):
+                config_path = args_list[config_index + 1]
+        except ValueError:
+            config_path = f"config/train_{model_type}_default.py"
+
+    pod_name = _extract_project_name_from_config(config_path, model_type)
+
+    # Initialize W&B run
     placeholder_name = f"pod-id-pending{'-' + note if note else ''}"
-    wandb_result = init_local_wandb_and_open_browser(project_name, placeholder_name)
-    wandb_run_id: str | None = None
-    _, wandb_run_id = wandb_result
-
-    # Build training command (wandb_run_id guaranteed because WANDB_API_KEY is required)
-    training_command = _build_training_command(
-        train_args, note, wandb_run_id, script_name
+    run = wandb.init(
+        project=pod_name,
+        name=placeholder_name,
+        tags=["runpod", "remote-training", "nnue-vision"],
+        notes=f"Remote NNUE-Vision training on RunPod",
     )
-    docker_script = _create_docker_script(training_command)
-    final_docker_args = _bash_c_quote(docker_script)
+    wandb_run_id = run.id
 
-    # ------------------------------------------------------------------ #
-    # 2. Create RunPod instance
-    # ------------------------------------------------------------------ #
+    # Build training command
+    cmd = f"{script_name} {train_args}"
+    if note:
+        cmd += f" --note={note}"
+    if wandb_run_id:
+        cmd += f" --wandb-run-id={wandb_run_id}"
+
+    # Create pod
+    docker_script = _create_docker_script(cmd)
+    final_docker_args = _bash_c_quote(docker_script)
     gpu_type_id = _resolve_gpu_id(gpu_type)
 
     try:
@@ -260,7 +144,7 @@ def start_cloud_training(
             start_ssh=False,
             docker_args=final_docker_args,
         )
-    except runpod.error.QueryError as exc:  # type: ignore[attr-defined]
+    except runpod.error.QueryError as exc:
         print("RunPod API QueryError:", exc)
         raise
 
@@ -268,158 +152,39 @@ def start_cloud_training(
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
 
-    if not wandb_run_id:
-        raise RunPodError("W&B run id not found")
-
-    # ------------------------------------------------------------------ #
-    # 3. Rename local W&B run to final name (pod_id or pod_id-note)
-    # ------------------------------------------------------------------ #
+    # Rename W&B run to final name
     final_name = pod_id if not note else f"{pod_id} - {note}"
     wandb.run.name = final_name
     print(f"W&B run renamed to: {final_name}")
     print(f"Remote training will resume W&B run: {wandb_run_id}")
+    print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}")
 
-    print(
-        f"Starting NNUE-Vision training job '{pod_name}' (pod {pod_id}) on {gpu_type}"
-    )
     return pod_id
-
-
-def init_local_wandb_and_open_browser(
-    project_name: str, run_name: str
-) -> tuple[str, str] | None:
-    """Initialize W&B project locally and open the run URL in browser."""
-    if not os.getenv("WANDB_API_KEY"):
-        raise ValueError("WANDB_API_KEY not set, cannot initialize local W&B run")
-
-    # Initialize W&B run
-    run = wandb.init(
-        project=project_name,
-        name=run_name,
-        tags=["runpod", "remote-training", "nnue-vision"],
-        notes=f"Remote NNUE-Vision training on RunPod instance {run_name}",
-    )
-
-    wandb_url = run.url + "/logs"
-    wandb_run_id = run.id
-
-    # Try to open in browser
-    _open_browser(wandb_url)
-
-    return (wandb_url, wandb_run_id)
-
-
-def _open_browser(url: str) -> None:
-    """Attempt to open URL in Chrome browser."""
-    chrome_commands = [
-        "google-chrome",  # Linux
-        "google-chrome-stable",  # Linux alternative
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
-        "chrome",  # Windows/generic
-        "chromium",  # Linux alternative
-        "chromium-browser",  # Linux alternative
-    ]
-
-    for chrome_cmd in chrome_commands:
-        try:
-            subprocess.run(
-                [chrome_cmd, url],
-                check=True,
-                capture_output=True,
-                timeout=5,
-            )
-            print(f"Opened W&B URL in Chrome: {url}")
-            return
-        except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
-        ):
-            continue
-
-    raise RunPodError(f"Could not open Chrome for url: {url}")
-
-
-def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
-    """Stop the active RunPod instance."""
-    print("Attempting to stop RunPod instance...")
-    pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
-    api_key = api_key or os.getenv("RUNPOD_API_KEY")
-
-    if not pod_id:
-        # We are not running on Runpod so there is nothing to stop
-        return False
-
-    if not api_key:
-        raise ValueError("RUNPOD_API_KEY not set.")
-
-    # Try the Python SDK first
-    try:
-        runpod.api_key = api_key
-        if hasattr(runpod, "stop_pod"):
-            runpod.stop_pod(pod_id)
-            print("Successfully requested pod stop (SDK).")
-            return True
-    except Exception as exc:  # noqa: BLE001
-        print(f"SDK method failed: {exc}. Falling back to REST call...")
-
-    # Fallback to direct REST API
-    try:
-        url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        wandb.finish()
-        resp = requests.post(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        print("Successfully requested pod stop (REST).")
-        return True
-    except Exception as exc:  # noqa: BLE001
-        print(f"Failed to stop pod: {exc}")
-        raise exc
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="RunPod helper for NNUE-Vision training\n\nLaunches cloud GPU training jobs for both NNUE and EtinyNet models.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # NNUE training
-  python runpod_service_nnue.py train --note "my-experiment" -- nnue --config config/train_nnue_default.py
-
-  # EtinyNet training  
-  python runpod_service_nnue.py train --note "my-experiment" -- etinynet --config config/train_etinynet_default.py
-
-  # Show detailed help
-  python runpod_service_nnue.py help
-
-For complete usage guide, run: python runpod_service.py help
-        """,
+        description="RunPod helper for NNUE-Vision training"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    # Help command
-    h = sub.add_parser("help", help="Show detailed training examples and usage guide")
-
-    t = sub.add_parser("train", help="Start NNUE-Vision training pod")
-    t.add_argument(
+    train_parser = sub.add_parser("train", help="Start NNUE-Vision training pod")
+    train_parser.add_argument(
         "train_args",
         nargs="*",
-        help="Training arguments (e.g., nnue --config config/train_nnue_default.py --max_epochs 100). Use -- to separate RunPod options from training arguments.",
+        help="Training arguments (e.g., nnue --config config/train_nnue_default.py)",
     )
-    t.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name")
-    t.add_argument("--api-key", help="RunPod API key")
-
-    t.add_argument("--note", help="Note to add to the W&B run")
-    t.add_argument(
-        "--script",
-        default="train.py",
-        help="Training script to run (defaults to unified train.py)",
+    train_parser.add_argument(
+        "--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type name"
+    )
+    train_parser.add_argument("--api-key", help="RunPod API key")
+    train_parser.add_argument("--note", help="Note to add to the W&B run")
+    train_parser.add_argument(
+        "--script", default="train.py", help="Training script to run"
     )
 
     args = parser.parse_args()
-    if args.cmd == "help":
-        print_training_help()
-    elif args.cmd == "train":
+    if args.cmd == "train":
         train_args_str = " ".join(args.train_args) if args.train_args else ""
         start_cloud_training(
             train_args_str,
