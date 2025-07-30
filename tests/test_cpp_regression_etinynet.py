@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from model import EtinyNet
@@ -34,8 +35,6 @@ class TestEtinyNetCppPyTorchRegression:
             num_classes=10,  # CIFAR-10 style
             input_size=32,  # 32x32 images
             use_asq=False,  # Disable ASQ for deterministic testing
-            lr=0.1,
-            max_epochs=10,
         )
         model.to(device)
         model.eval()
@@ -193,6 +192,9 @@ class TestEtinyNetCppPyTorchRegression:
         with torch.no_grad():
             x = test_images[0:1]  # Single image
 
+            # Apply initial convolution first
+            x = F.relu6(model.bn_initial(model.conv_initial(x)))
+
             # Test stage by stage
             x_stage1 = model.stage1(x)
             assert (
@@ -226,8 +228,9 @@ class TestEtinyNetCppPyTorchRegression:
                 x_stage4
             ).any(), "Stage4 output should not contain NaN"
 
-            # Global pooling and classification
-            x_pooled = model.global_pool(x_stage4)
+            # Apply final convolution and global pooling
+            x_final = F.relu6(model.bn_final(model.conv_final(x_stage4)))
+            x_pooled = model.global_pool(x_final)
             assert (
                 x_pooled.shape[2] == 1 and x_pooled.shape[3] == 1
             ), "Global pool should produce 1x1 spatial"
@@ -251,8 +254,6 @@ class TestEtinyNetCppPyTorchRegression:
             input_size=32,
             use_asq=True,
             asq_bits=4,
-            lr=0.1,
-            max_epochs=10,
         )
         model_asq.to(device)
         model_asq.train()  # ASQ only works in training mode
@@ -265,7 +266,9 @@ class TestEtinyNetCppPyTorchRegression:
                 elif "bias" in name:
                     param.data.zero_()
 
-        test_input = torch.randn(1, 3, 32, 32, device=device)
+        test_input = torch.randn(
+            2, 3, 32, 32, device=device
+        )  # Use batch size 2 for training mode
         test_input = torch.sigmoid(test_input)
 
         # Forward pass should work with ASQ

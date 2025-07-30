@@ -8,7 +8,7 @@ Uses minimal data and tiny model parameters for fast iteration.
 name = "etinynet_default"
 
 # EtinyNet-specific settings
-etinynet_variant = "0.75"  # Smallest variant
+etinynet_variant = "micro"  # Ultra-tiny variant for local testing
 use_asq = False  # Disable ASQ for speed
 asq_bits = 4
 

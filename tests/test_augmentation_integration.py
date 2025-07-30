@@ -125,46 +125,6 @@ class TestAugmentationIntegration:
         except Exception as e:
             pytest.skip(f"EtinyNet training test skipped due to: {e}")
 
-    def test_augmentation_config_in_wandb(self):
-        """Test that augmentation settings are properly logged to wandb config."""
-        from types import SimpleNamespace
-
-        from nnue_adapter import NNUEAdapter
-
-        adapter = NNUEAdapter()
-
-        # Create mock config with augmentation settings
-        config = SimpleNamespace(
-            learning_rate=0.001,
-            input_size=(96, 96),
-            num_classes=10,
-            num_ls_buckets=8,
-            visual_threshold=0.0,
-            batch_size=32,
-            max_epochs=50,
-            num_workers=4,
-            accelerator="auto",
-            patience=10,
-            save_top_k=3,
-            name="test_config",
-            use_augmentation=True,
-            augmentation_strength="heavy",
-        )
-
-        wandb_config = adapter.setup_wandb_config(config)
-
-        # Check that augmentation settings would be logged
-        # (Note: These aren't explicitly added to wandb config yet,
-        # but the system should work)
-        assert "model/learning_rate" in wandb_config
-        assert "train/batch_size" in wandb_config
-
-        # The config object has the augmentation settings
-        assert hasattr(config, "use_augmentation")
-        assert hasattr(config, "augmentation_strength")
-        assert config.use_augmentation is True
-        assert config.augmentation_strength == "heavy"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -259,6 +259,7 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             use_augmentation=getattr(config, "use_augmentation", True),
             augmentation_strength=getattr(config, "augmentation_strength", "medium"),
             max_samples_per_split=getattr(config, "max_samples_per_split", None),
+            subset=getattr(config, "subset", 1.0),
             binary_classification=getattr(config, "binary_classification", None),
         )
         early_log("✅ Data loaders created successfully")
@@ -589,6 +590,7 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
             use_augmentation=getattr(config, "use_augmentation", True),
             augmentation_strength=getattr(config, "augmentation_strength", "medium"),
             max_samples_per_split=getattr(config, "max_samples_per_split", None),
+            subset=getattr(config, "subset", 1.0),
             binary_classification=getattr(config, "binary_classification", None),
         )
         early_log("✅ Data loaders created successfully")

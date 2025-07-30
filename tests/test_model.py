@@ -70,29 +70,32 @@ class TestLayerStacks:
 
     def test_layer_stacks_initialization(self):
         """Test LayerStacks initialization."""
+        l1_size, l2_size, l3_size = 128, 16, 32
         num_buckets = 4
-        layer_stacks = LayerStacks(num_buckets)
+        num_classes = 1
+        layer_stacks = LayerStacks(l1_size, l2_size, l3_size, num_buckets, num_classes)
 
-        assert layer_stacks.count == num_buckets
-        assert hasattr(layer_stacks, "l1")
-        assert hasattr(layer_stacks, "l2")
-        assert hasattr(layer_stacks, "output")
+        assert layer_stacks.num_buckets == num_buckets
+        assert layer_stacks.num_classes == num_classes
+        assert len(layer_stacks.stacks) == num_buckets
 
     def test_layer_stacks_forward(self, device):
         """Test LayerStacks forward pass."""
+        l1_size, l2_size, l3_size = 128, 16, 32
         num_buckets = 2
-        layer_stacks = LayerStacks(num_buckets)
+        num_classes = 1
+        layer_stacks = LayerStacks(l1_size, l2_size, l3_size, num_buckets, num_classes)
         layer_stacks.to(device)
 
         batch_size = 2
         input_tensor = torch.randn(
-            batch_size, 1024, device=device
-        )  # Updated to new default L1 size
+            batch_size, l1_size, device=device
+        )  # Use the actual l1_size
         bucket_indices = torch.tensor([0, 1], device=device)
 
         output = layer_stacks(input_tensor, bucket_indices)
 
-        assert output.shape == (batch_size, 1)
+        assert output.shape == (batch_size, num_classes)
         assert_model_output_valid(output, batch_size)
 
 

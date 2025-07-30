@@ -24,9 +24,16 @@ rm -rf /var/lib/apt/lists/* || true
 apt-get update || { log "apt update failed, retrying..."; dpkg --configure -a || true; apt-get update || true; }
 apt-get install -y --no-install-recommends tree htop || true
 
+# Set up pip cache in persistent storage for faster subsequent installs
+export PIP_CACHE_DIR="/runpod-volume/pip-cache"
+mkdir -p "$PIP_CACHE_DIR"
+
+log "using pip cache dir: $PIP_CACHE_DIR"
+pip install -r requirements-dev.txt
+
 # Install Python dependencies
 log "installing python dependencies"
-pip install -q -r requirements-dev.txt || { 
+pip install -r requirements-dev.txt || { 
     log "pip install failed, upgrading pip and retrying"
     pip install --upgrade pip
     pip install -r requirements-dev.txt

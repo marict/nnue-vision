@@ -90,13 +90,20 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", weight.shape[3]))  # kernel_width (should be 3)
 
     # Write weights (int8, little endian)
-    weight_bytes = weight.cpu().numpy().astype("i1").tobytes()
+    if hasattr(weight, "cpu"):
+        weight_bytes = weight.cpu().numpy().astype("i1").tobytes()
+    else:
+        weight_bytes = weight.astype("i1").tobytes()
     f.write(weight_bytes)
 
     # Write bias dimensions and data
-    f.write(struct.pack("<I", bias.shape[0]))  # out_channels
-    bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
-    f.write(bias_bytes)
+    if bias is not None:
+        f.write(struct.pack("<I", bias.shape[0]))  # out_channels
+        if hasattr(bias, "cpu"):
+            bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
+        else:
+            bias_bytes = bias.astype("<i4").tobytes()
+        f.write(bias_bytes)
 
 
 def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -215,41 +222,48 @@ def quantize_linear_depthwise_block(block, scale=64.0):
         actual_block = block
         data["use_skip"] = False
 
-    # Get stride from first depthwise conv
-    data["stride"] = actual_block.dconv1.stride[0]
+    # Get stride from depthwise conv
+    data["stride"] = actual_block.dw_conv.stride[0]
 
-    # Quantize depthwise conv1 (no bias)
-    dw1_weight = actual_block.dconv1.weight.data
-    dw1_weight_q = torch.round(dw1_weight * scale).clamp(-127, 127).to(torch.int8)
+    # Our LinearDepthwiseBlock structure: pw_expand -> dw_conv -> pw_project
+    # Map to expected serialization format:
 
-    data["depthwise_weight"] = dw1_weight_q
+    # Quantize pointwise expansion (pw_expand) - maps to "depthwise" in serialization
+    pw_expand_weight = actual_block.pw_expand.weight.data
+    pw_expand_weight_q = (
+        torch.round(pw_expand_weight * scale).clamp(-127, 127).to(torch.int8)
+    )
+
+    data["depthwise_weight"] = pw_expand_weight_q
     data["depthwise_scale"] = scale
 
-    # Quantize pointwise conv (with bias)
-    pw_weight = actual_block.pconv.weight.data
-    pw_bias = actual_block.pconv.bias.data
-    pw_weight_q = torch.round(pw_weight * scale).clamp(-127, 127).to(torch.int8)
-    pw_bias_q = torch.round(pw_bias * scale).to(torch.int32)
+    # Quantize depthwise conv (dw_conv) - maps to "pointwise" in serialization
+    dw_weight = actual_block.dw_conv.weight.data
+    dw_weight_q = torch.round(dw_weight * scale).clamp(-127, 127).to(torch.int8)
+    # Note: depthwise conv doesn't have bias, so create zero bias
+    dw_bias_q = torch.zeros(dw_weight.shape[0], dtype=torch.int32)
 
-    data["pointwise_weight"] = pw_weight_q
-    data["pointwise_bias"] = pw_bias_q
+    data["pointwise_weight"] = dw_weight_q
+    data["pointwise_bias"] = dw_bias_q
     data["pointwise_scale"] = scale
 
-    # Quantize depthwise conv2 (no bias)
-    dw2_weight = actual_block.dconv2.weight.data
-    dw2_weight_q = torch.round(dw2_weight * scale).clamp(-127, 127).to(torch.int8)
+    # Quantize pointwise projection (pw_project) - maps to "depthwise2" in serialization
+    pw_project_weight = actual_block.pw_project.weight.data
+    pw_project_weight_q = (
+        torch.round(pw_project_weight * scale).clamp(-127, 127).to(torch.int8)
+    )
 
-    data["depthwise2_weight"] = dw2_weight_q
+    data["depthwise2_weight"] = pw_project_weight_q
     data["depthwise2_scale"] = scale
 
-    # Quantize final pointwise conv (with bias)
-    pout_weight = actual_block.pconv_out.weight.data
-    pout_bias = actual_block.pconv_out.bias.data
-    pout_weight_q = torch.round(pout_weight * scale).clamp(-127, 127).to(torch.int8)
-    pout_bias_q = torch.round(pout_bias * scale).to(torch.int32)
+    # Create dummy "pointwise_out" layer (not used in our architecture)
+    # Use identity mapping from pw_project output
+    out_channels = pw_project_weight.shape[0]
+    pw_out_weight_q = torch.eye(out_channels, dtype=torch.int8)
+    pw_out_bias_q = torch.zeros(out_channels, dtype=torch.int32)
 
-    data["pointwise_out_weight"] = pout_weight_q
-    data["pointwise_out_bias"] = pout_bias_q
+    data["pointwise_out_weight"] = pw_out_weight_q
+    data["pointwise_out_bias"] = pw_out_bias_q
     data["pointwise_out_scale"] = scale
 
     return data
@@ -276,30 +290,31 @@ def get_etinynet_quantized_data(model: EtinyNet):
     # Extract and quantize layers from each stage
     layers = []
 
-    # Stage 1: Extract initial conv layer and LinearDepthwiseBlocks
-    # stage1 structure: Sequential(Conv2d, ReLU, MaxPool2d, LinearDepthwiseBlock, LinearDepthwiseBlock, ...)
-    stage1_list = list(model.stage1.children())
-
-    # Initial conv layer (first module in stage1)
-    initial_conv = stage1_list[0]  # Conv2d
+    # Extract initial conv layer (separate from stages)
+    initial_conv = model.conv_initial  # Conv2d
     initial_conv_data = quantize_conv_layer(initial_conv)
     initial_conv_data["layer_type"] = 0  # Standard conv
     layers.append(initial_conv_data)
 
-    # Extract LinearDepthwiseBlocks from stage1 (skip Conv2d, ReLU, MaxPool2d)
-    for module in stage1_list[3:]:  # Skip Conv2d, ReLU, MaxPool2d
-        if hasattr(module, "dconv1"):  # LinearDepthwiseBlock
+    # Extract LinearDepthwiseBlocks from stage1
+    stage1_list = list(model.stage1.children())
+
+    # Extract LinearDepthwiseBlocks from stage1 (all modules are LinearDepthwiseBlocks)
+    for module in stage1_list:
+        if hasattr(module, "pw_expand"):  # LinearDepthwiseBlock
             layer_data = quantize_linear_depthwise_block(module)
             layers.append(layer_data)
 
     # Extract blocks from stage2, stage3, stage4
     for stage in [model.stage2, model.stage3, model.stage4]:
         for module in stage.children():  # Use .children() not .modules()
-            if hasattr(module, "dconv1"):  # LinearDepthwiseBlock
+            if hasattr(module, "pw_expand"):  # LinearDepthwiseBlock
                 layer_data = quantize_linear_depthwise_block(module)
                 layers.append(layer_data)
-            elif hasattr(module, "linear_block"):  # DenseLinearDepthwiseBlock
-                layer_data = quantize_linear_depthwise_block(module)
+            elif hasattr(module, "lb"):  # DenseLinearDepthwiseBlock
+                layer_data = quantize_linear_depthwise_block(
+                    module.lb
+                )  # Get the inner LinearDepthwiseBlock
                 layers.append(layer_data)
 
     quantized_data["layers"] = layers
@@ -364,12 +379,18 @@ def write_feature_transformer(f, ft_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", weight.shape[1]))  # output_size (L1)
 
     # Write weights (int16, little endian)
-    weight_bytes = weight.cpu().numpy().astype("<i2").tobytes()
+    if hasattr(weight, "cpu"):
+        weight_bytes = weight.cpu().numpy().astype("<i2").tobytes()
+    else:
+        weight_bytes = weight.astype("<i2").tobytes()
     f.write(weight_bytes)
 
     # Write bias dimensions and data
     f.write(struct.pack("<I", bias.shape[0]))  # output_size (L1)
-    bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
+    if hasattr(bias, "cpu"):
+        bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
+    else:
+        bias_bytes = bias.astype("<i4").tobytes()
     f.write(bias_bytes)
 
 
@@ -389,10 +410,16 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
 
     f.write(struct.pack("<I", l1_weight.shape[0]))  # output_size (L2)
     f.write(struct.pack("<I", l1_weight.shape[1]))  # input_size (L1)
-    f.write(l1_weight.cpu().numpy().astype("i1").tobytes())
+    if hasattr(l1_weight, "cpu"):
+        f.write(l1_weight.cpu().numpy().astype("i1").tobytes())
+    else:
+        f.write(l1_weight.astype("i1").tobytes())
 
     f.write(struct.pack("<I", l1_bias.shape[0]))
-    f.write(l1_bias.cpu().numpy().astype("<i4").tobytes())
+    if hasattr(l1_bias, "cpu"):
+        f.write(l1_bias.cpu().numpy().astype("<i4").tobytes())
+    else:
+        f.write(l1_bias.astype("<i4").tobytes())
 
     # L1 factorization layer
     l1_fact_weight = ls_data["l1_fact_weight"]  # int8
@@ -400,10 +427,16 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
 
     f.write(struct.pack("<I", l1_fact_weight.shape[0]))  # output_size (L2+1)
     f.write(struct.pack("<I", l1_fact_weight.shape[1]))  # input_size (L1)
-    f.write(l1_fact_weight.cpu().numpy().astype("i1").tobytes())
+    if hasattr(l1_fact_weight, "cpu"):
+        f.write(l1_fact_weight.cpu().numpy().astype("i1").tobytes())
+    else:
+        f.write(l1_fact_weight.astype("i1").tobytes())
 
     f.write(struct.pack("<I", l1_fact_bias.shape[0]))
-    f.write(l1_fact_bias.cpu().numpy().astype("<i4").tobytes())
+    if hasattr(l1_fact_bias, "cpu"):
+        f.write(l1_fact_bias.cpu().numpy().astype("<i4").tobytes())
+    else:
+        f.write(l1_fact_bias.astype("<i4").tobytes())
 
     # L2 layer
     l2_weight = ls_data["l2_weight"]  # int8
@@ -411,10 +444,16 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
 
     f.write(struct.pack("<I", l2_weight.shape[0]))  # output_size (L3)
     f.write(struct.pack("<I", l2_weight.shape[1]))  # input_size (L2 * 2)
-    f.write(l2_weight.cpu().numpy().astype("i1").tobytes())
+    if hasattr(l2_weight, "cpu"):
+        f.write(l2_weight.cpu().numpy().astype("i1").tobytes())
+    else:
+        f.write(l2_weight.astype("i1").tobytes())
 
     f.write(struct.pack("<I", l2_bias.shape[0]))
-    f.write(l2_bias.cpu().numpy().astype("<i4").tobytes())
+    if hasattr(l2_bias, "cpu"):
+        f.write(l2_bias.cpu().numpy().astype("<i4").tobytes())
+    else:
+        f.write(l2_bias.astype("<i4").tobytes())
 
     # Output layer
     output_weight = ls_data["output_weight"]  # int8
@@ -422,10 +461,16 @@ def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
 
     f.write(struct.pack("<I", output_weight.shape[0]))  # output_size (1)
     f.write(struct.pack("<I", output_weight.shape[1]))  # input_size (L3)
-    f.write(output_weight.cpu().numpy().astype("i1").tobytes())
+    if hasattr(output_weight, "cpu"):
+        f.write(output_weight.cpu().numpy().astype("i1").tobytes())
+    else:
+        f.write(output_weight.astype("i1").tobytes())
 
     f.write(struct.pack("<I", output_bias.shape[0]))
-    f.write(output_bias.cpu().numpy().astype("<i4").tobytes())
+    if hasattr(output_bias, "cpu"):
+        f.write(output_bias.cpu().numpy().astype("<i4").tobytes())
+    else:
+        f.write(output_bias.astype("<i4").tobytes())
 
 
 def serialize_model(model: NNUE, output_path: Path) -> None:
@@ -605,7 +650,7 @@ def load_etinynet_from_checkpoint(checkpoint_path: Path) -> EtinyNet:
 
 
 def infer_etinynet_variant_from_state_dict(state_dict) -> str:
-    """Infer EtinyNet variant (1.0 or 0.75) from state dict."""
+    """Infer EtinyNet variant from state dict based on initial conv channels."""
     # Look at initial conv layer output channels
     for key in state_dict.keys():
         if "stage1.0.weight" in key:  # Initial conv layer
@@ -613,8 +658,12 @@ def infer_etinynet_variant_from_state_dict(state_dict) -> str:
             out_channels = conv_weight.shape[0]
             if out_channels == 32:
                 return "1.0"
+            elif out_channels == 28:
+                return "0.98M"
             elif out_channels == 24:
                 return "0.75"
+            elif out_channels == 8:
+                return "micro"
 
     # Default to 1.0
     return "1.0"
