@@ -36,7 +36,7 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
-from runpod_service_nnue import stop_runpod
+from nnue_runpod_service import stop_runpod
 from training_utils import (
     check_disk_space_emergency,
     cleanup_disk_space_emergency,

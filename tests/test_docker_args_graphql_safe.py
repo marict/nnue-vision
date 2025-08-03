@@ -8,7 +8,7 @@ syntax errors that were causing RunPod API failures.
 import pytest
 from graphql import build_schema, parse
 
-from runpod_service_nnue import _bash_c_quote, _create_docker_script
+from nnue_runpod_service import _bash_c_quote, _create_docker_script
 
 # Only import GraphQL if available (it's in requirements-dev.txt)
 try:

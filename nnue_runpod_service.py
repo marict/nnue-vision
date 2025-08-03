@@ -196,13 +196,14 @@ def start_cloud_training(
 
 def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
     """Stop the active RunPod instance."""
-    print("Attempting to stop RunPod instance...")
     pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 
     if not pod_id:
         # Not running on RunPod, nothing to stop
         return False
+
+    print(f"Attempting to stop RunPod instance {pod_id}...")
 
     if not api_key:
         raise ValueError("RUNPOD_API_KEY not set.")
