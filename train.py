@@ -360,7 +360,6 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                         num_batches += 1
 
                         # Log to wandb
-                        step = epoch * len(train_loader) + batch_idx
                         wandb.log(
                             {
                                 "train/loss": loss.item(),
@@ -369,7 +368,6 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                                 "epoch": epoch,
                                 "learning_rate": optimizer.param_groups[0]["lr"],
                             },
-                            step=step,
                             commit=True,
                         )
 
@@ -426,7 +424,9 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 "val/recall": val_metrics["recall"],
             }
 
-            wandb.log(epoch_log, step=epoch * len(train_loader), commit=True)
+            # Debug: Print what we're logging to wandb
+            early_log(f"📊 Logging to wandb: val/f1={val_metrics['f1']:.4f}")
+            wandb.log(epoch_log, commit=True)
 
             early_log(
                 f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
@@ -692,7 +692,6 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                         num_batches += 1
 
                         # Log to wandb
-                        step = epoch * len(train_loader) + batch_idx
                         wandb.log(
                             {
                                 "train/loss": loss.item(),
@@ -701,7 +700,6 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                                 "epoch": epoch,
                                 "learning_rate": optimizer.param_groups[0]["lr"],
                             },
-                            step=step,
                             commit=True,
                         )
 
@@ -755,7 +753,9 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 "val/recall": val_metrics["recall"],
             }
 
-            wandb.log(epoch_log, step=epoch * len(train_loader), commit=True)
+            # Debug: Print what we're logging to wandb
+            early_log(f"📊 Logging to wandb: val/f1={val_metrics['f1']:.4f}")
+            wandb.log(epoch_log, commit=True)
 
             early_log(
                 f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
