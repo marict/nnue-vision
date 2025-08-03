@@ -2,7 +2,9 @@ import argparse
 import os
 import re
 import shlex
+import subprocess
 
+import requests
 import runpod
 from graphql.language.print_string import print_string
 
@@ -45,6 +47,32 @@ def _extract_project_name_from_config(
     except Exception:
         print(f"Warning: failed to load config from {config_path}")
         raise
+
+
+def _open_browser(url: str) -> None:
+    """Try to open URL in browser."""
+    chrome_commands = [
+        "google-chrome",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
+        "chrome",
+        "chromium",
+    ]
+
+    for chrome_cmd in chrome_commands:
+        try:
+            subprocess.run(
+                [chrome_cmd, url], check=True, capture_output=True, timeout=5
+            )
+            print(f"Opened W&B URL in browser: {url}")
+            return
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
+            continue
+
+    print(f"Could not open browser automatically. Visit: {url}")
 
 
 def _create_docker_script(training_command: str) -> str:
@@ -113,6 +141,10 @@ def start_cloud_training(
     )
     wandb_run_id = run.id
 
+    # Open W&B URL in browser
+    wandb_url = run.url + "/logs"
+    _open_browser(wandb_url)
+
     # Build training command
     cmd = f"{script_name} {train_args}"
     if note:
@@ -160,6 +192,43 @@ def start_cloud_training(
     print(f"Starting training job '{pod_name}' (pod {pod_id}) on {gpu_type}")
 
     return pod_id
+
+
+def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
+    """Stop the active RunPod instance."""
+    print("Attempting to stop RunPod instance...")
+    pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
+    api_key = api_key or os.getenv("RUNPOD_API_KEY")
+
+    if not pod_id:
+        # Not running on RunPod, nothing to stop
+        return False
+
+    if not api_key:
+        raise ValueError("RUNPOD_API_KEY not set.")
+
+    # Try the Python SDK first
+    try:
+        runpod.api_key = api_key
+        if hasattr(runpod, "stop_pod"):
+            runpod.stop_pod(pod_id)
+            print("Successfully requested pod stop (SDK).")
+            return True
+    except Exception as exc:
+        print(f"SDK method failed: {exc}. Falling back to REST call...")
+
+    # Fallback to direct REST API
+    try:
+        url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        wandb.finish()
+        resp = requests.post(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        print("Successfully requested pod stop (REST).")
+        return True
+    except Exception as exc:
+        print(f"Failed to stop pod: {exc}")
+        raise exc
 
 
 if __name__ == "__main__":
