@@ -33,7 +33,7 @@ max_epochs = 300  # EtinyNet duration
 patience = 999999  # Let cosine schedule finish
 
 # Learning rate schedule - EtinyNet's secret sauce
-use_cosine_scheduler = True  # Enable cosine annealing
+use_cosine_scheduler = False  # Enable cosine annealing
 
 use_augmentation = True
 augmentation_strength = "heavy"  # Conservative for learning
