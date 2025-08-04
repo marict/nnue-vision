@@ -667,8 +667,8 @@ class NNUE(nn.Module):
         # Transform sparse features to dense representation
         features = self.input(feature_indices, feature_values)
 
-        # Clamp to [0, 1] (keep this - it's part of quantization preparation)
-        l0_ = torch.clamp(features, 0.0, 1.0)
+        # Remove quantization clamping - let features use full dynamic range during training
+        l0_ = features
 
         # Apply pairwise multiplication (core NNUE technique for feature interactions)
         # Split features in half and multiply element-wise to create quadratic interactions
@@ -678,7 +678,7 @@ class NNUE(nn.Module):
         )  # Element-wise multiplication creates feature interactions
 
         # Concatenate multiplied features with original half (standard NNUE approach)
-        l0_ = torch.cat([l0_s1, l0_s[0]], dim=1) * (127 / 128)
+        l0_ = torch.cat([l0_s1, l0_s[0]], dim=1)
 
         # Pass through simple classifier
         x = self.classifier(l0_)

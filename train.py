@@ -114,8 +114,6 @@ def adapt_batch_for_nnue(batch):
 
 def compute_nnue_loss(model, batch):
     """Compute NNUE loss for training."""
-    model._clip_weights()  # NNUE weight clipping
-
     images, targets = batch
 
     # Forward pass
