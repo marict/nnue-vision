@@ -12,6 +12,48 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class StraightThroughEstimator(torch.autograd.Function):
+    """Straight-Through Estimator for binary thresholding with continuous gradients."""
+
+    @staticmethod
+    def forward(ctx, input, threshold=0.0):
+        """Forward: Apply hard binary thresholding."""
+        # Save input and threshold for backward pass
+        ctx.save_for_backward(input, threshold)
+        # Apply hard threshold in forward pass (discrete output)
+        output = (input > threshold).float()
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """Backward: Pass gradients straight through for input, computed gradients for threshold."""
+        input, threshold = ctx.saved_tensors
+
+        # Gradient w.r.t. input: straight-through (ignore discretization)
+        grad_input = grad_output
+
+        # Gradient w.r.t. threshold: negative of input gradient at threshold boundary
+        # This encourages the threshold to move in direction that increases active neurons
+        grad_threshold = None
+        if threshold.requires_grad:
+            # Sum over all positions where input is close to threshold
+            # Use sigmoid approximation for gradient: grad = -sum(grad_output * sigmoid'(k*(input-threshold)))
+            k = 10.0  # Sharpness factor for sigmoid approximation
+            sigmoid_grad = (
+                k
+                * torch.sigmoid(k * (input - threshold))
+                * (1 - torch.sigmoid(k * (input - threshold)))
+            )
+            grad_threshold = -(grad_output * sigmoid_grad).sum()
+
+        return grad_input, grad_threshold
+
+
+def straight_through_threshold(x, threshold=0.0):
+    """Apply STE binary thresholding: discrete forward, continuous backward."""
+    return StraightThroughEstimator.apply(x, threshold)
+
+
 # Loss parameters for NNUE
 @dataclass
 class LossParams:
@@ -411,9 +453,9 @@ class NNUE(nn.Module):
         l2_size: int = DEFAULT_L2,
         l3_size: int = DEFAULT_L3,
         loss_params=LossParams(),
-        visual_threshold=0.0,
         num_classes=1,
         weight_decay=5e-4,
+        input_size=32,  # Default to CIFAR-10 size
     ):
         super().__init__()
 
@@ -425,16 +467,15 @@ class NNUE(nn.Module):
         self.l1_size = l1_size
         self.l2_size = l2_size
         self.l3_size = l3_size
-        self.visual_threshold = visual_threshold
         self.num_classes = num_classes
         self.loss_params = loss_params
         self.weight_decay = weight_decay
+        self.input_size = input_size
 
-        # Calculate conv parameters
-        conv_out_channels = feature_set.num_features_per_square
-        input_size = 96
-        target_grid_size = feature_set.grid_size
-        conv_stride = max(1, (input_size + 2 * 1 - 3) // (target_grid_size - 1))
+        # Calculate conv parameters based on input size
+        conv_out_channels, conv_stride = self._calculate_conv_params(
+            input_size, feature_set.grid_size, feature_set.num_features_per_square
+        )
 
         # Convolutional frontend
         self.conv = nn.Conv2d(
@@ -458,6 +499,31 @@ class NNUE(nn.Module):
 
         # NNUE-to-score scaling factor
         self.nnue2score = nn.Parameter(torch.tensor(600.0))
+
+        # Learnable binary threshold for STE
+        self.visual_threshold = nn.Parameter(torch.tensor(0.0))
+
+    def _calculate_conv_params(
+        self, input_size, target_grid_size, num_features_per_square
+    ):
+        """Calculate optimal conv parameters for given input size and target grid."""
+        # Calculate stride to achieve target grid size
+        # Formula: output_size = (input_size + 2*padding - kernel_size) // stride + 1
+        # We want: output_size = target_grid_size
+        # With kernel_size=3, padding=1: output_size = (input_size + 2 - 3) // stride + 1 = (input_size - 1) // stride + 1
+        # So: target_grid_size = (input_size - 1) // stride + 1
+        # Solving: stride = (input_size - 1) // (target_grid_size - 1)
+        conv_stride = max(1, (input_size - 1) // (target_grid_size - 1))
+
+        # Verify the output size
+        actual_output_size = (input_size + 2 * 1 - 3) // conv_stride + 1
+
+        print(f"Conv params: input_size={input_size}, target_grid={target_grid_size}")
+        print(
+            f"  Calculated stride: {conv_stride}, actual output: {actual_output_size}x{actual_output_size}"
+        )
+
+        return num_features_per_square, conv_stride
 
     def _clip_weights(self):
         """Clip weights to expected ranges for quantization."""
@@ -484,7 +550,6 @@ class NNUE(nn.Module):
             "L2": self.l2_size,
             "L3": self.l3_size,
             "num_classes": self.num_classes,
-            "visual_threshold": self.visual_threshold,
             "nnue2score": self.nnue2score.item(),
             "quantized_one": 127.0,
         }
@@ -589,16 +654,15 @@ class NNUE(nn.Module):
         # Apply Hardtanh activation
         x = self.hardtanh(x)
 
-        # Apply threshold to get binary values
-        if self.training:
-            # Smooth approximation using sigmoid
-            binary_features = torch.sigmoid(10.0 * (x - self.visual_threshold))
-        else:
-            # Hard threshold for inference
-            binary_features = (x > self.visual_threshold).float()
+        # Apply binary thresholding with Straight-Through Estimator
+        # Forward: discrete {0,1} features, Backward: continuous gradients
+        # Threshold is learnable parameter that can adapt to the task
+        features_for_nnue = straight_through_threshold(
+            x, threshold=self.visual_threshold
+        )
 
         # Convert to sparse features for NNUE
-        feature_indices, feature_values = self._to_sparse_features(binary_features)
+        feature_indices, feature_values = self._to_sparse_features(features_for_nnue)
 
         # Transform sparse features to dense representation
         features = self.input(feature_indices, feature_values)

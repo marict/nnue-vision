@@ -38,7 +38,6 @@ def create_example_model():
         l2_size=8,
         l3_size=16,
         num_classes=10,
-        visual_threshold=0.5,
     )
 
     print(

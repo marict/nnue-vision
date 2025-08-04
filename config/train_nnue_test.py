@@ -14,8 +14,8 @@ weight_decay = 5e-4
 l1_size = 64  # Much smaller than default
 l2_size = 4  # Much smaller than default
 l3_size = 8  # Much smaller than default
-visual_threshold = 0.0
 num_classes = 10
+input_size = 32  # Native CIFAR-10 size
 
 # Dataset parameters
 dataset_name = "cifar10"

@@ -206,8 +206,8 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             l2_size=getattr(config, "l2_size", 15),
             l3_size=getattr(config, "l3_size", 32),
             loss_params=loss_params,
-            visual_threshold=getattr(config, "visual_threshold", 0.0),
             num_classes=getattr(config, "num_classes", 1),
+            input_size=getattr(config, "input_size", 32),
         )
         early_log("✅ NNUE model created successfully")
 

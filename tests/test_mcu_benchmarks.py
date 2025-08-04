@@ -54,7 +54,6 @@ def small_nnue_model(device):
         l2_size=8,
         l3_size=16,
         num_classes=10,
-        visual_threshold=0.5,
     )
     model.to(device)
     model.eval()
@@ -294,11 +293,11 @@ class TestSparsityAnalysis:
         feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
 
         # Model with low threshold (more features active)
-        low_thresh_model = NNUE(feature_set=feature_set, visual_threshold=-0.5)
+        low_thresh_model = NNUE(feature_set=feature_set)
         low_thresh_model.to(device).eval()
 
         # Model with high threshold (fewer features active)
-        high_thresh_model = NNUE(feature_set=feature_set, visual_threshold=0.5)
+        high_thresh_model = NNUE(feature_set=feature_set)
         high_thresh_model.to(device).eval()
 
         low_sparsity = analyze_sparsity(

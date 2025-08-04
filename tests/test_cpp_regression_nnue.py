@@ -41,7 +41,6 @@ class TestCppPyTorchRegression:
             l2_size=8,
             l3_size=16,
             num_ls_buckets=2,
-            visual_threshold=0.5,
         )
         model.to(device)
         model.eval()

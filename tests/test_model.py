@@ -345,7 +345,6 @@ class TestNNUESparsityPerformance:
             l2_size=8,
             l3_size=16,
             num_classes=10,
-            visual_threshold=-1.0,  # Very low threshold -> most features active
         )
         dense_model.to(device)
         dense_model.eval()
@@ -357,7 +356,6 @@ class TestNNUESparsityPerformance:
             l2_size=8,
             l3_size=16,
             num_classes=10,
-            visual_threshold=1.0,  # High threshold -> few features active
         )
         sparse_model.to(device)
         sparse_model.eval()
@@ -395,12 +393,12 @@ class TestNNUESparsityPerformance:
         with torch.no_grad():
             # For dense model with dense input (should be very dense)
             dense_conv_out = dense_model.hardtanh(dense_model.conv(dense_input))
-            dense_binary = (dense_conv_out > dense_model.visual_threshold).float()
+            dense_binary = (dense_conv_out > 0.0).float()
             dense_sparsity = 1.0 - (dense_binary.sum() / dense_binary.numel()).item()
 
             # For sparse model with sparse input (should be very sparse)
             sparse_conv_out = sparse_model.hardtanh(sparse_model.conv(sparse_input))
-            sparse_binary = (sparse_conv_out > sparse_model.visual_threshold).float()
+            sparse_binary = (sparse_conv_out > 0.0).float()
             sparse_sparsity = 1.0 - (sparse_binary.sum() / sparse_binary.numel()).item()
 
         print(f"Dense latent sparsity: {dense_sparsity:.3f}")
@@ -508,7 +506,6 @@ class TestNNUESparsityPerformance:
                 l2_size=4,
                 l3_size=8,
                 num_classes=10,
-                visual_threshold=threshold,
             )
             model.to(device)
             model.eval()
@@ -560,7 +557,6 @@ class TestNNUESparsityPerformance:
             l2_size=16,
             l3_size=32,
             num_classes=10,
-            visual_threshold=0.0,  # We'll manually control sparsity
         )
         model.to(device)
         model.eval()
@@ -779,7 +775,6 @@ class TestNNUESparsityPerformance:
             l2_size=l2_size,
             l3_size=l3_size,
             num_classes=10,
-            visual_threshold=0.0,
         )
 
         optimized_model = NNUE(
@@ -788,7 +783,6 @@ class TestNNUESparsityPerformance:
             l2_size=l2_size,
             l3_size=l3_size,
             num_classes=10,
-            visual_threshold=0.0,
         )
 
         # Copy weights to ensure fair comparison
@@ -1196,7 +1190,6 @@ class TestNNUESparsityPerformance:
             l2_size=8,
             l3_size=16,
             num_classes=10,
-            visual_threshold=0.5,
         )
         model.to(device)
         model.eval()
@@ -1386,7 +1379,6 @@ class TestNNUESparsityPerformance:
             l2_size=16,
             l3_size=32,
             num_classes=10,
-            visual_threshold=0.5,
         )
         model.to(device)
         model.eval()
@@ -1670,7 +1662,6 @@ class TestNNUESparsityPerformance:
             l2_size=16,
             l3_size=32,
             num_classes=10,
-            visual_threshold=0.5,
         )
         model.to(device)
         model.eval()

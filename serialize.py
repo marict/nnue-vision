@@ -40,9 +40,6 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     f.write(struct.pack("<f", metadata["nnue2score"]))
     f.write(struct.pack("<f", metadata["quantized_one"]))
 
-    # Visual processing parameters (new in version 2)
-    f.write(struct.pack("<f", metadata["visual_threshold"]))
-
 
 def write_etinynet_header(f, metadata: Dict[str, Any]) -> None:
     """Write the EtinyNet file header with model metadata."""

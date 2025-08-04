@@ -68,7 +68,7 @@ class GenericVisionDataset(Dataset):
         self,
         dataset_name: str = "cifar10",
         split: str = "train",
-        target_size: Tuple[int, int] = (96, 96),
+        target_size: Optional[Tuple[int, int]] = None,  # Auto-determine from dataset
         max_samples: Optional[int] = None,
         subset: float = 1.0,
         data_root: str = "./data/raw",
@@ -92,7 +92,6 @@ class GenericVisionDataset(Dataset):
         """
         self.dataset_name = dataset_name
         self.split = split
-        self.target_size = target_size
         self.max_samples = max_samples
         self.subset = subset
         self.data_root = Path(data_root)
@@ -102,6 +101,24 @@ class GenericVisionDataset(Dataset):
 
         # Get dataset info
         self.dataset_info = get_dataset_info(dataset_name)
+
+        # Auto-determine target_size from dataset native size if not provided
+        if target_size is None:
+            native_sizes = {
+                "cifar10": (32, 32),
+                "cifar100": (32, 32),
+                "imagenet": (224, 224),  # Standard ImageNet size
+                "mnist": (28, 28),
+                "fashionmnist": (28, 28),
+            }
+            self.target_size = native_sizes.get(
+                dataset_name.lower(), (96, 96)
+            )  # Fallback to 96x96
+            print(
+                f"📏 Auto-determined target_size for {dataset_name}: {self.target_size}"
+            )
+        else:
+            self.target_size = target_size
 
         # Setup binary classification if specified
         if binary_classification:

@@ -9,15 +9,14 @@ name = "nnue_default"
 # Dataset and model settings
 batch_size = 2  # Minimal batch size
 num_workers = 0  # No multiprocessing for speed
-input_size = (32, 32)  # Smaller images for speed
 num_classes = 10  # CIFAR-10 classes for testing
+input_size = 32  # Native CIFAR-10 size
 learning_rate = 1e-3
 weight_decay = 5e-4  # L2 regularization strength
 subset = 0.001  # Use only 0.1% of data (just a few samples)
 
 # NNUE-specific minimal settings
-# num_ls_buckets removed - no longer needed for computer vision
-visual_threshold = 0.0
+# Simplified architecture for computer vision (no chess-specific features)
 
 # Training settings
 max_epochs = 1  # Single epoch only

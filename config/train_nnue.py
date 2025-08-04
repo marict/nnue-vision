@@ -8,9 +8,6 @@ import this file quickly.
 # Project identification
 name = "nnue_vision-gpu"
 
-# NNUE-specific settings
-visual_threshold = 0.0
-
 # Dataset and model settings
 batch_size = 1024  # GPU-friendly
 num_workers = 8  # Reasonable parallelism
