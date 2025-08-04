@@ -11,8 +11,13 @@ name = "nnue_vision-gpu"
 # Dataset and model settings
 batch_size = 1024  # GPU-friendly
 num_workers = 8  # Reasonable parallelism
-input_size = (32, 32)  # Native CIFAR-10 resolution (no upsampling needed)
 num_classes = 10  # CIFAR-10 classes
+
+# NNUE model architecture
+l1_size = 1024  # Feature transformer output size
+l2_size = 15  # First classifier hidden layer
+l3_size = 32  # Second classifier hidden layer
+input_size = 32  # Native CIFAR-10 image size (was tuple, now int for model)
 learning_rate = 0.5  # Initial LR for cosine annealing (was 3e-4 * (1024 / 64))
 weight_decay = 2e-4  # L2 regularization strength
 subset = 1.0  # Use full dataset
