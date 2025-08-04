@@ -193,7 +193,7 @@ def nnue_model():
         l1_size=128,  # Much smaller than new default 1024
         l2_size=8,  # Smaller than default 15
         l3_size=16,  # Smaller than default 32
-        num_ls_buckets=2,  # Smaller for testing
+        num_classes=10,  # CIFAR-10 classes
     )
 
 
@@ -206,7 +206,7 @@ def small_nnue_model():
         l1_size=64,  # Very small
         l2_size=4,  # Tiny
         l3_size=8,  # Tiny
-        num_ls_buckets=2,
+        num_classes=10,
     )
 
 
@@ -219,7 +219,7 @@ def tiny_nnue_model():
         l1_size=32,  # Minimal
         l2_size=4,  # Minimal
         l3_size=4,  # Minimal
-        num_ls_buckets=2,
+        num_classes=10,
     )
 
 

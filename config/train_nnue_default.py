@@ -4,7 +4,6 @@ Designed to complete quickly for development and testing.
 Uses minimal data and tiny model parameters for fast iteration.
 """
 
-# Project identification
 name = "nnue_default"
 
 # Dataset and model settings
@@ -17,7 +16,7 @@ weight_decay = 5e-4  # L2 regularization strength
 subset = 0.001  # Use only 0.1% of data (just a few samples)
 
 # NNUE-specific minimal settings
-num_ls_buckets = 2  # Minimal buckets
+# num_ls_buckets removed - no longer needed for computer vision
 visual_threshold = 0.0
 
 # Training settings

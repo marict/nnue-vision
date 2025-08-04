@@ -101,62 +101,28 @@ class CheckpointManager:
         return checkpoint["epoch"], checkpoint["metrics"]
 
 
-def adapt_batch_for_nnue(batch, num_ls_buckets=8):
+def adapt_batch_for_nnue(batch):
     """Adapt batch from dataset format to NNUE format."""
     images, labels = batch
-    batch_size = images.shape[0]
     device = images.device
 
-    # Convert labels to targets (float format for loss computation)
-    targets = labels.float().to(device)
+    # Convert labels to targets (keep as integers for CrossEntropyLoss)
+    targets = labels.to(device)
 
-    # Generate dummy scores for NNUE (since we don't have search engine scores)
-    scores = torch.randn(batch_size, device=device) * 100
-
-    # Generate layer stack indices (bucket selection)
-    layer_stack_indices = torch.randint(0, num_ls_buckets, (batch_size,), device=device)
-
-    return images, targets, scores, layer_stack_indices
+    return images, targets
 
 
 def compute_nnue_loss(model, batch):
     """Compute NNUE loss for training."""
     model._clip_weights()  # NNUE weight clipping
 
-    images, targets, scores, layer_stack_indices = batch
+    images, targets = batch
 
     # Forward pass
-    logits = model(images, layer_stack_indices)
+    logits = model(images)
 
-    # Use different loss functions based on number of classes
-    if model.num_classes > 1:
-        # Multi-class classification: use CrossEntropyLoss
-        loss = F.cross_entropy(logits, targets.long())
-    else:
-        # Original NNUE loss for single output (chess-style evaluation)
-        scorenet = logits * model.nnue2score
-
-        p = model.loss_params
-        # Convert network and search scores to match result estimate
-        q = (scorenet - p.in_offset) / p.in_scaling
-        qm = (-scorenet - p.in_offset) / p.in_scaling
-        qf = 0.5 * (1.0 + q.sigmoid() - qm.sigmoid())
-
-        s = (scores - p.out_offset) / p.out_scaling
-        sm = (-scores - p.out_offset) / p.out_scaling
-        pf = 0.5 * (1.0 + s.sigmoid() - sm.sigmoid())
-
-        # Blend eval-based score with actual targets
-        t = targets
-        # Note: epoch progression would need to be tracked for lambda
-        actual_lambda = p.start_lambda  # Simplified for now
-        pt = pf * actual_lambda + t * (1.0 - actual_lambda)
-
-        # MSE-like loss function
-        loss = torch.pow(torch.abs(pt - qf), p.pow_exp)
-        if p.qp_asymmetry != 0.0:
-            loss = loss * ((qf > pt) * p.qp_asymmetry + 1)
-        loss = loss.mean()
+    # For computer vision classification, always use CrossEntropyLoss
+    loss = F.cross_entropy(logits, targets.long())
 
     return loss
 
@@ -239,7 +205,6 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             l1_size=getattr(config, "l1_size", 1024),
             l2_size=getattr(config, "l2_size", 15),
             l3_size=getattr(config, "l3_size", 32),
-            num_ls_buckets=getattr(config, "num_ls_buckets", 8),
             loss_params=loss_params,
             visual_threshold=getattr(config, "visual_threshold", 0.0),
             num_classes=getattr(config, "num_classes", 1),
@@ -282,7 +247,6 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             "max_epochs": getattr(config, "max_epochs", 50),
             "model_type": "nnue",
             "num_classes": getattr(config, "num_classes", 1),
-            "num_ls_buckets": getattr(config, "num_ls_buckets", 8),
             "dataset_name": getattr(config, "dataset_name", "cifar10"),
         }
 
@@ -334,9 +298,7 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 images, labels = images.to(device), labels.to(device)
 
                 # Adapt batch for NNUE format
-                nnue_batch = adapt_batch_for_nnue(
-                    (images, labels), model.num_ls_buckets
-                )
+                nnue_batch = adapt_batch_for_nnue((images, labels))
 
                 # Zero gradients
                 optimizer.zero_grad()
@@ -403,13 +365,11 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                     images, labels = images.to(device), labels.to(device)
 
                     # Adapt batch for NNUE format
-                    nnue_batch = adapt_batch_for_nnue(
-                        (images, labels), model.num_ls_buckets
-                    )
+                    nnue_batch = adapt_batch_for_nnue((images, labels))
 
                     # Forward pass
                     loss = compute_nnue_loss(model, nnue_batch)
-                    outputs = model(nnue_batch[0], nnue_batch[3])
+                    outputs = model(nnue_batch[0])
 
                     val_loss += loss.item()
                     val_outputs.append(outputs.cpu())
@@ -480,12 +440,10 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 images, labels = batch
                 images, labels = images.to(device), labels.to(device)
 
-                nnue_batch = adapt_batch_for_nnue(
-                    (images, labels), model.num_ls_buckets
-                )
+                nnue_batch = adapt_batch_for_nnue((images, labels))
 
                 loss = compute_nnue_loss(model, nnue_batch)
-                outputs = model(nnue_batch[0], nnue_batch[3])
+                outputs = model(nnue_batch[0])
 
                 test_loss += loss.item()
                 test_outputs.append(outputs.cpu())
@@ -947,9 +905,6 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         help="Dataset to use",
     )
     parser.add_argument("--num_classes", type=int, help="Number of classes (for NNUE)")
-    parser.add_argument(
-        "--num_ls_buckets", type=int, help="Number of layer stack buckets (for NNUE)"
-    )
 
     return parser
 
@@ -993,8 +948,7 @@ def load_and_setup_config(args: argparse.Namespace, model_type: str) -> Any:
     elif model_type == "nnue":
         if args.num_classes is not None:
             config.num_classes = args.num_classes
-        if args.num_ls_buckets is not None:
-            config.num_ls_buckets = args.num_ls_buckets
+
         if args.dataset_name is not None:
             config.dataset_name = args.dataset_name
 

@@ -42,3 +42,7 @@ always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1
 keep_alive = True  # Keep RunPod instance alive after training
+
+# Logging backends
+log_dir = "logs"
+project_name = "nnue_training"

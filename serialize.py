@@ -34,7 +34,7 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", metadata["L1"]))  # L1 size
     f.write(struct.pack("<I", metadata["L2"]))  # L2 size
     f.write(struct.pack("<I", metadata["L3"]))  # L3 size
-    f.write(struct.pack("<I", metadata["num_ls_buckets"]))  # Number of layer stacks
+    f.write(struct.pack("<I", metadata["num_classes"]))  # Number of output classes
 
     # Quantization parameters
     f.write(struct.pack("<f", metadata["nnue2score"]))
@@ -393,83 +393,36 @@ def write_feature_transformer(f, ft_data: Dict[str, Any]) -> None:
     f.write(bias_bytes)
 
 
-def write_layer_stack(f, ls_data: Dict[str, Any]) -> None:
-    """Write quantized layer stack weights and biases."""
-    scales = ls_data["scales"]
+def write_classifier(f, classifier_data: Dict[str, Any]) -> None:
+    """Write quantized classifier weights and biases."""
+    layers = classifier_data["layers"]
 
-    # Write scales (including factorization scale)
-    f.write(struct.pack("<f", scales["l1"]))
-    f.write(struct.pack("<f", scales["l2"]))
-    f.write(struct.pack("<f", scales["output"]))
-    f.write(struct.pack("<f", scales["l1_fact"]))
+    # Write number of layers
+    f.write(struct.pack("<I", len(layers)))
 
-    # L1 layer
-    l1_weight = ls_data["l1_weight"]  # int8
-    l1_bias = ls_data["l1_bias"]  # int32
+    # Write each layer
+    for layer in layers:
+        weight = layer["weight"]  # float32 -> int8
+        bias = layer["bias"]  # float32 -> int32
+        scale = layer["scale"]  # float32
 
-    f.write(struct.pack("<I", l1_weight.shape[0]))  # output_size (L2)
-    f.write(struct.pack("<I", l1_weight.shape[1]))  # input_size (L1)
-    if hasattr(l1_weight, "cpu"):
-        f.write(l1_weight.cpu().numpy().astype("i1").tobytes())
-    else:
-        f.write(l1_weight.astype("i1").tobytes())
+        # Write scale
+        f.write(struct.pack("<f", scale))
 
-    f.write(struct.pack("<I", l1_bias.shape[0]))
-    if hasattr(l1_bias, "cpu"):
-        f.write(l1_bias.cpu().numpy().astype("<i4").tobytes())
-    else:
-        f.write(l1_bias.astype("<i4").tobytes())
+        # Write weight
+        f.write(struct.pack("<I", weight.shape[0]))  # output_size
+        f.write(struct.pack("<I", weight.shape[1]))  # input_size
+        if hasattr(weight, "cpu"):
+            f.write(weight.cpu().numpy().astype("i1").tobytes())
+        else:
+            f.write(weight.astype("i1").tobytes())
 
-    # L1 factorization layer
-    l1_fact_weight = ls_data["l1_fact_weight"]  # int8
-    l1_fact_bias = ls_data["l1_fact_bias"]  # int32
-
-    f.write(struct.pack("<I", l1_fact_weight.shape[0]))  # output_size (L2+1)
-    f.write(struct.pack("<I", l1_fact_weight.shape[1]))  # input_size (L1)
-    if hasattr(l1_fact_weight, "cpu"):
-        f.write(l1_fact_weight.cpu().numpy().astype("i1").tobytes())
-    else:
-        f.write(l1_fact_weight.astype("i1").tobytes())
-
-    f.write(struct.pack("<I", l1_fact_bias.shape[0]))
-    if hasattr(l1_fact_bias, "cpu"):
-        f.write(l1_fact_bias.cpu().numpy().astype("<i4").tobytes())
-    else:
-        f.write(l1_fact_bias.astype("<i4").tobytes())
-
-    # L2 layer
-    l2_weight = ls_data["l2_weight"]  # int8
-    l2_bias = ls_data["l2_bias"]  # int32
-
-    f.write(struct.pack("<I", l2_weight.shape[0]))  # output_size (L3)
-    f.write(struct.pack("<I", l2_weight.shape[1]))  # input_size (L2 * 2)
-    if hasattr(l2_weight, "cpu"):
-        f.write(l2_weight.cpu().numpy().astype("i1").tobytes())
-    else:
-        f.write(l2_weight.astype("i1").tobytes())
-
-    f.write(struct.pack("<I", l2_bias.shape[0]))
-    if hasattr(l2_bias, "cpu"):
-        f.write(l2_bias.cpu().numpy().astype("<i4").tobytes())
-    else:
-        f.write(l2_bias.astype("<i4").tobytes())
-
-    # Output layer
-    output_weight = ls_data["output_weight"]  # int8
-    output_bias = ls_data["output_bias"]  # int32
-
-    f.write(struct.pack("<I", output_weight.shape[0]))  # output_size (1)
-    f.write(struct.pack("<I", output_weight.shape[1]))  # input_size (L3)
-    if hasattr(output_weight, "cpu"):
-        f.write(output_weight.cpu().numpy().astype("i1").tobytes())
-    else:
-        f.write(output_weight.astype("i1").tobytes())
-
-    f.write(struct.pack("<I", output_bias.shape[0]))
-    if hasattr(output_bias, "cpu"):
-        f.write(output_bias.cpu().numpy().astype("<i4").tobytes())
-    else:
-        f.write(output_bias.astype("<i4").tobytes())
+        # Write bias
+        f.write(struct.pack("<I", bias.shape[0]))
+        if hasattr(bias, "cpu"):
+            f.write(bias.cpu().numpy().astype("<i4").tobytes())
+        else:
+            f.write(bias.astype("<i4").tobytes())
 
 
 def serialize_model(model: NNUE, output_path: Path) -> None:
@@ -497,10 +450,8 @@ def serialize_model(model: NNUE, output_path: Path) -> None:
         # Write feature transformer
         write_feature_transformer(f, quantized_data["feature_transformer"])
 
-        # Write layer stacks
-        num_ls_buckets = quantized_data["metadata"]["num_ls_buckets"]
-        for i in range(num_ls_buckets):
-            write_layer_stack(f, quantized_data[f"layer_stack_{i}"])
+        # Write classifier
+        write_classifier(f, quantized_data["classifier"])
 
     print(f"Successfully serialized model to {output_path}")
 
@@ -514,7 +465,7 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
         state_dict = checkpoint["state_dict"]
         # Try to extract hyperparameters from checkpoint
         # If they're not available, we'll infer them from the state dict
-        saved_num_ls_buckets = checkpoint.get("num_ls_buckets")
+        saved_num_classes = checkpoint.get("num_classes")
         saved_feature_set = checkpoint.get("feature_set")
         saved_l1_size = checkpoint.get("l1_size")
         saved_l2_size = checkpoint.get("l2_size")
@@ -524,7 +475,7 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
         if all(
             param is not None
             for param in [
-                saved_num_ls_buckets,
+                saved_num_classes,
                 saved_feature_set,
                 saved_l1_size,
                 saved_l2_size,
@@ -535,16 +486,16 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
             l1_size = saved_l1_size
             l2_size = saved_l2_size
             l3_size = saved_l3_size
-            num_ls_buckets = saved_num_ls_buckets
+            num_classes = saved_num_classes
         else:
             # Infer architecture from state dict
-            feature_set, l1_size, l2_size, l3_size, num_ls_buckets = (
+            feature_set, l1_size, l2_size, l3_size, num_classes = (
                 infer_architecture_from_state_dict(state_dict)
             )
     else:
         state_dict = checkpoint
         # Infer model architecture from state dict shapes
-        feature_set, l1_size, l2_size, l3_size, num_ls_buckets = (
+        feature_set, l1_size, l2_size, l3_size, num_classes = (
             infer_architecture_from_state_dict(state_dict)
         )
 
@@ -554,7 +505,7 @@ def load_model_from_checkpoint(checkpoint_path: Path) -> NNUE:
         l1_size=l1_size,
         l2_size=l2_size,
         l3_size=l3_size,
-        num_ls_buckets=num_ls_buckets,
+        num_classes=num_classes,
     )
 
     model.load_state_dict(state_dict)
@@ -706,10 +657,6 @@ def infer_architecture_from_state_dict(
     num_features = input_weight_shape[0]  # [num_features, L1]
     l1_size = input_weight_shape[1]
 
-    # Infer number of layer stack buckets from output layer shape FIRST
-    output_weight_shape = state_dict["layer_stacks.output.weight"].shape
-    num_ls_buckets = output_weight_shape[0]  # [num_buckets, L3]
-
     # Infer grid size and features per square from conv layer
     conv_weight_shape = state_dict["conv.weight"].shape
     conv_out_channels = conv_weight_shape[0]  # This should match features_per_square
@@ -738,26 +685,35 @@ def infer_architecture_from_state_dict(
 
     feature_set = GridFeatureSet(grid_size, features_per_square)
 
-    # Infer L2 and L3 sizes from layer stack shapes
-    # L2 size from l1_fact layer: l1_fact has shape [L2+1, L1]
-    l1_fact_weight_shape = state_dict["layer_stacks.l1_fact.weight"].shape
-    l2_size = l1_fact_weight_shape[0] - 1  # Remove the +1 from factorization
+    # Infer architecture from SimpleClassifier layers
+    # Find the first and last layers of the classifier
+    classifier_layers = [
+        key for key in state_dict.keys() if key.startswith("classifier.classifier")
+    ]
 
-    # L3 size from output layer: output has shape [num_buckets, L3]
-    l3_size = output_weight_shape[1]  # L3 size
+    # Get L2 and L3 from classifier layers
+    # First linear layer: classifier.classifier.0.weight has shape [L2, L1]
+    first_layer_key = "classifier.classifier.0.weight"
+    if first_layer_key in state_dict:
+        l2_size = state_dict[first_layer_key].shape[0]
+    else:
+        l2_size = 16  # Default fallback
 
-    # Verify with L2 layer shape (should be [L3 * num_buckets, L2 * 2])
-    l2_weight_shape = state_dict["layer_stacks.l2.weight"].shape
-    expected_l2_input_size = l2_size * 2  # Due to squared concatenation
-    expected_l2_output_size = l3_size * num_ls_buckets
+    # Second linear layer: classifier.classifier.2.weight has shape [L3, L2]
+    second_layer_key = "classifier.classifier.2.weight"
+    if second_layer_key in state_dict:
+        l3_size = state_dict[second_layer_key].shape[0]
+    else:
+        l3_size = 32  # Default fallback
 
-    if (
-        l2_weight_shape[0] != expected_l2_output_size
-        or l2_weight_shape[1] != expected_l2_input_size
-    ):
-        raise ValueError(f"Invalid L2 layer shape: {l2_weight_shape}")
+    # Final layer: classifier.classifier.4.weight has shape [num_classes, L3]
+    final_layer_key = "classifier.classifier.4.weight"
+    if final_layer_key in state_dict:
+        num_classes = state_dict[final_layer_key].shape[0]
+    else:
+        num_classes = 10  # Default fallback for CIFAR-10
 
-    return feature_set, l1_size, l2_size, l3_size, num_ls_buckets
+    return feature_set, l1_size, l2_size, l3_size, num_classes
 
 
 def run_etinynet_cpp(model_path: Path, image: torch.Tensor) -> np.ndarray:  # type: ignore
@@ -899,7 +855,7 @@ def main():
         print(
             f"  Layer sizes: {model.l1_size} -> {model.l2_size} -> {model.l3_size} -> 1"
         )
-        print(f"  Layer stack buckets: {model.num_ls_buckets}")
+        print(f"  Number of classes: {model.num_classes}")
 
         # Determine output format
         if args.output.suffix not in [".nnue", ".bin"]:

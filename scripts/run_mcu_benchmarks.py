@@ -175,7 +175,7 @@ def load_model(model_path: Path, device: torch.device) -> NNUE:
         f"   Architecture: {model.feature_set.num_features} → {model.l1_size} → {model.l2_size} → {model.l3_size}"
     )
     print(f"   Feature set: {model.feature_set}")
-    print(f"   Layer stacks: {model.num_ls_buckets}")
+    print(f"   Number of classes: {model.num_classes}")
 
     return model
 

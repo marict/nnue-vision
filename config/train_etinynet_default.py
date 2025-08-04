@@ -44,4 +44,4 @@ keep_alive = False  # Terminate RunPod instance after training completes
 
 # Default settings
 log_dir = "logs"
-project_name = "etinynet_default"
+project_name = "nnue_default"

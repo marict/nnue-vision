@@ -46,7 +46,7 @@ class TestWeightDecayConfiguration:
             l1_size=128,
             l2_size=16,
             l3_size=32,
-            num_ls_buckets=2,
+            num_classes=10,
         )
 
         # Check default weight_decay
@@ -64,7 +64,7 @@ class TestWeightDecayConfiguration:
             l1_size=128,
             l2_size=16,
             l3_size=32,
-            num_ls_buckets=2,
+            num_classes=10,
             weight_decay=custom_weight_decay,
         )
 

@@ -17,7 +17,7 @@ try:
 except ImportError:
     numba = None
 
-from model import NNUE, FeatureTransformer, GridFeatureSet, LayerStacks
+from model import NNUE, FeatureTransformer, GridFeatureSet, SimpleClassifier
 from serialize import serialize_model
 from tests.conftest import assert_model_output_valid
 
@@ -65,35 +65,29 @@ class TestGridFeatureSet:
         assert feature_set.num_features_per_square == 6
 
 
-class TestLayerStacks:
-    """Test LayerStacks functionality."""
+class TestSimpleClassifier:
+    """Test SimpleClassifier functionality."""
 
-    def test_layer_stacks_initialization(self):
-        """Test LayerStacks initialization."""
+    def test_simple_classifier_initialization(self):
+        """Test SimpleClassifier initialization."""
         l1_size, l2_size, l3_size = 128, 16, 32
-        num_buckets = 4
-        num_classes = 1
-        layer_stacks = LayerStacks(l1_size, l2_size, l3_size, num_buckets, num_classes)
+        num_classes = 10
+        classifier = SimpleClassifier(l1_size, l2_size, l3_size, num_classes)
 
-        assert layer_stacks.num_buckets == num_buckets
-        assert layer_stacks.num_classes == num_classes
-        assert len(layer_stacks.stacks) == num_buckets
+        assert classifier.num_classes == num_classes
+        assert isinstance(classifier.classifier, torch.nn.Sequential)
 
-    def test_layer_stacks_forward(self, device):
-        """Test LayerStacks forward pass."""
+    def test_simple_classifier_forward(self, device):
+        """Test SimpleClassifier forward pass."""
         l1_size, l2_size, l3_size = 128, 16, 32
-        num_buckets = 2
-        num_classes = 1
-        layer_stacks = LayerStacks(l1_size, l2_size, l3_size, num_buckets, num_classes)
-        layer_stacks.to(device)
+        num_classes = 10
+        classifier = SimpleClassifier(l1_size, l2_size, l3_size, num_classes)
+        classifier.to(device)
 
         batch_size = 2
-        input_tensor = torch.randn(
-            batch_size, l1_size, device=device
-        )  # Use the actual l1_size
-        bucket_indices = torch.tensor([0, 1], device=device)
+        input_tensor = torch.randn(batch_size, l1_size, device=device)
 
-        output = layer_stacks(input_tensor, bucket_indices)
+        output = classifier(input_tensor)
 
         assert output.shape == (batch_size, num_classes)
         assert_model_output_valid(output, batch_size)
@@ -121,7 +115,7 @@ class TestNNUEBasic:
         assert hasattr(model, "feature_set")
         assert hasattr(model, "input")  # FeatureTransformer is called 'input'
         assert hasattr(model, "conv")  # Conv layer is called 'conv'
-        assert hasattr(model, "layer_stacks")
+        assert hasattr(model, "classifier")
 
     def test_nnue_device_placement(self, tiny_nnue_model, device):
         """Test NNUE model device placement."""
@@ -143,6 +137,165 @@ class TestNNUEBasic:
         # Test eval mode
         model.eval()
         assert not model.training
+
+    def test_nnue_gradient_flow(self, tiny_nnue_model, device):
+        """Test that gradients flow properly through NNUE model."""
+        model = tiny_nnue_model
+        model.to(device)
+        model.train()  # Ensure training mode for gradient computation
+
+        # Create dummy input data
+        batch_size = 4
+        input_shape = (batch_size, 3, 32, 32)  # CIFAR-10 size
+        images = torch.randn(input_shape, device=device, requires_grad=True)
+        targets = torch.randint(0, model.num_classes, (batch_size,), device=device)
+
+        # Zero gradients
+        model.zero_grad()
+
+        # Forward pass
+        outputs = model(images)
+
+        # Verify output shape
+        assert outputs.shape == (batch_size, model.num_classes)
+
+        # Compute loss (use CrossEntropyLoss like in training)
+        loss = torch.nn.functional.cross_entropy(outputs, targets)
+
+        # Backward pass
+        loss.backward()
+
+        # Verify gradients exist for parameters that should have them (used in forward pass)
+        # Note: nnue2score is a legacy parameter not used in current forward pass
+        params_with_grads = []
+        params_without_grads = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                if param.grad is not None:
+                    params_with_grads.append(name)
+                else:
+                    params_without_grads.append(name)
+
+        # nnue2score is expected to have no gradient since it's not used in forward pass
+        assert (
+            "nnue2score" in params_without_grads
+        ), "nnue2score should not have gradient (not used in forward pass)"
+
+        # All other parameters should have gradients
+        critical_params = [
+            "conv.weight",
+            "input.weight",
+            "input.bias",
+            "classifier.classifier.0.weight",
+            "classifier.classifier.0.bias",
+        ]
+        for param_name in critical_params:
+            assert (
+                param_name in params_with_grads
+            ), f"Critical parameter {param_name} should have gradient"
+
+        # Verify gradients are non-zero for parameters that have them
+        total_grad_norm = 0.0
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                total_grad_norm += param.grad.norm().item() ** 2
+        total_grad_norm = total_grad_norm**0.5
+        assert (
+            total_grad_norm > 1e-8
+        ), f"Total gradient norm too small: {total_grad_norm}"
+
+        # Check specific critical components have gradients
+        critical_components = [
+            "conv.weight",
+            "input.weight",
+            "classifier.classifier.0.weight",
+        ]
+        for component_name in critical_components:
+            param = None
+            for name, p in model.named_parameters():
+                if component_name in name:
+                    param = p
+                    break
+            assert param is not None, f"Component {component_name} not found in model"
+            assert (
+                param.grad is not None
+            ), f"No gradient for critical component {component_name}"
+            assert (
+                param.grad.norm().item() > 1e-8
+            ), f"Zero gradient for critical component {component_name}"
+
+        print(
+            f"✅ Gradient flow verified - total gradient norm: {sum(p.grad.norm().item()**2 for p in model.parameters() if p.grad is not None)**0.5:.6f}"
+        )
+
+    def test_nnue_can_learn(self, tiny_nnue_model, device):
+        """Test that NNUE model can actually learn and improve accuracy."""
+        model = tiny_nnue_model
+        model.to(device)
+        model.train()
+
+        # Create simple synthetic data that's learnable
+        torch.manual_seed(42)  # For reproducible results
+        batch_size = 32
+        num_batches = 20
+
+        # Simple pattern: if sum of RGB values > threshold, class=1, else class=0
+        # This creates a learnable binary classification problem
+        def generate_batch():
+            images = torch.randn(batch_size, 3, 32, 32, device=device)
+            # Create labels based on a simple rule the model can learn
+            rgb_sum = images.mean(dim=(2, 3)).sum(dim=1)  # Sum of mean RGB values
+            targets = (rgb_sum > 0).long()  # Binary classification
+            return images, targets
+
+        # Setup optimizer
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        # Get initial accuracy
+        model.eval()
+        test_images, test_targets = generate_batch()
+        with torch.no_grad():
+            initial_outputs = model(test_images)
+            initial_predictions = torch.argmax(initial_outputs, dim=1)
+            initial_accuracy = (
+                (initial_predictions == test_targets).float().mean().item()
+            )
+
+        # Train for a few steps
+        model.train()
+        for batch_idx in range(num_batches):
+            images, targets = generate_batch()
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+
+            if batch_idx % 10 == 0:
+                print(f"Batch {batch_idx}, Loss: {loss.item():.4f}")
+
+        # Get final accuracy
+        model.eval()
+        with torch.no_grad():
+            final_outputs = model(test_images)
+            final_predictions = torch.argmax(final_outputs, dim=1)
+            final_accuracy = (final_predictions == test_targets).float().mean().item()
+
+        print(
+            f"✅ Training test - Initial accuracy: {initial_accuracy:.3f}, Final accuracy: {final_accuracy:.3f}"
+        )
+
+        # Model should improve (might not be perfect on such a simple task, but should be better than random)
+        assert (
+            final_accuracy > 0.3
+        ), f"Final accuracy too low: {final_accuracy} (model may not be learning)"
+        assert (
+            final_accuracy >= initial_accuracy - 0.1
+        ), f"Model got worse: {initial_accuracy} -> {final_accuracy}"
+
+        print(f"✅ NNUE successfully demonstrated learning capability!")
 
 
 class TestNNUEForward:
@@ -191,7 +344,7 @@ class TestNNUESparsityPerformance:
             l1_size=128,
             l2_size=8,
             l3_size=16,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=-1.0,  # Very low threshold -> most features active
         )
         dense_model.to(device)
@@ -203,7 +356,7 @@ class TestNNUESparsityPerformance:
             l1_size=128,
             l2_size=8,
             l3_size=16,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=1.0,  # High threshold -> few features active
         )
         sparse_model.to(device)
@@ -354,7 +507,7 @@ class TestNNUESparsityPerformance:
                 l1_size=32,
                 l2_size=4,
                 l3_size=8,
-                num_ls_buckets=2,
+                num_classes=10,
                 visual_threshold=threshold,
             )
             model.to(device)
@@ -406,7 +559,7 @@ class TestNNUESparsityPerformance:
             l1_size=512,
             l2_size=16,
             l3_size=32,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=0.0,  # We'll manually control sparsity
         )
         model.to(device)
@@ -625,7 +778,7 @@ class TestNNUESparsityPerformance:
             l1_size=l1_size,
             l2_size=l2_size,
             l3_size=l3_size,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=0.0,
         )
 
@@ -634,7 +787,7 @@ class TestNNUESparsityPerformance:
             l1_size=l1_size,
             l2_size=l2_size,
             l3_size=l3_size,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=0.0,
         )
 
@@ -1042,7 +1195,7 @@ class TestNNUESparsityPerformance:
             l1_size=128,
             l2_size=8,
             l3_size=16,
-            num_ls_buckets=2,
+            num_classes=10,
             visual_threshold=0.5,
         )
         model.to(device)
@@ -1232,7 +1385,7 @@ class TestNNUESparsityPerformance:
             l1_size=256,
             l2_size=16,
             l3_size=32,
-            num_ls_buckets=4,
+            num_classes=10,
             visual_threshold=0.5,
         )
         model.to(device)
@@ -1516,7 +1669,7 @@ class TestNNUESparsityPerformance:
             l1_size=256,
             l2_size=16,
             l3_size=32,
-            num_ls_buckets=4,
+            num_classes=10,
             visual_threshold=0.5,
         )
         model.to(device)

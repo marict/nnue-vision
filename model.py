@@ -410,7 +410,6 @@ class NNUE(nn.Module):
         l1_size: int = DEFAULT_L1,
         l2_size: int = DEFAULT_L2,
         l3_size: int = DEFAULT_L3,
-        num_ls_buckets=8,
         loss_params=LossParams(),
         visual_threshold=0.0,
         num_classes=1,
@@ -426,7 +425,6 @@ class NNUE(nn.Module):
         self.l1_size = l1_size
         self.l2_size = l2_size
         self.l3_size = l3_size
-        self.num_ls_buckets = num_ls_buckets
         self.visual_threshold = visual_threshold
         self.num_classes = num_classes
         self.loss_params = loss_params
@@ -455,10 +453,8 @@ class NNUE(nn.Module):
         max_features = feature_set.num_features
         self.input = FeatureTransformer(max_features, l1_size)
 
-        # Layer stacks (NNUE evaluation layers)
-        self.layer_stacks = LayerStacks(
-            l1_size, l2_size, l3_size, num_ls_buckets, num_classes
-        )
+        # Simple classifier (replaces chess-specific layer stacks)
+        self.classifier = SimpleClassifier(l1_size, l2_size, l3_size, num_classes)
 
         # NNUE-to-score scaling factor
         self.nnue2score = nn.Parameter(torch.tensor(600.0))
@@ -470,8 +466,8 @@ class NNUE(nn.Module):
             with torch.no_grad():
                 self.input.weight.clamp_(-1.0, 1.0)
 
-        # Clip layer stack weights to [-1, 1] range
-        for module in self.layer_stacks.modules():
+        # Clip classifier weights to [-1, 1] range
+        for module in self.classifier.modules():
             if isinstance(module, nn.Linear):
                 with torch.no_grad():
                     module.weight.clamp_(-1.0, 1.0)
@@ -487,7 +483,7 @@ class NNUE(nn.Module):
             "L1": self.l1_size,
             "L2": self.l2_size,
             "L3": self.l3_size,
-            "num_ls_buckets": self.num_ls_buckets,
+            "num_classes": self.num_classes,
             "visual_threshold": self.visual_threshold,
             "nnue2score": self.nnue2score.item(),
             "quantized_one": 127.0,
@@ -513,56 +509,28 @@ class NNUE(nn.Module):
             "scale": 64.0,  # Default scale for quantization
         }
 
-        # Quantize layer stacks (simplified structure for compatibility)
-        for i in range(self.num_ls_buckets):
-            stack = self.layer_stacks.stacks[i]
-            linear_layers = [layer for layer in stack if isinstance(layer, nn.Linear)]
+        # Quantize simple classifier (new architecture without buckets)
+        linear_layers = [
+            layer
+            for layer in self.classifier.classifier
+            if isinstance(layer, nn.Linear)
+        ]
 
-            # Create simplified layer stack structure that matches expected format
-            if len(linear_layers) >= 3:  # L1->L2->Output pattern
-                l1_layer = linear_layers[0]  # L1 layer
-                l2_layer = linear_layers[1]  # L2 layer
-                output_layer = linear_layers[2]  # Output layer
+        classifier_data = {"layers": []}
 
-                layer_stack_data = {
-                    "scales": {"l1": 64.0, "l2": 64.0, "output": 16.0, "l1_fact": 64.0},
-                    "l1_weight": l1_layer.weight.detach().cpu().numpy(),
-                    "l1_bias": (
-                        l1_layer.bias.detach().cpu().numpy()
-                        if l1_layer.bias is not None
-                        else np.zeros(l1_layer.weight.shape[0])
-                    ),
-                    "l1_fact_weight": (
-                        l1_layer.weight.detach().cpu().numpy()[: self.l2_size + 1]
-                        if l1_layer.weight.shape[0] > self.l2_size
-                        else l1_layer.weight.detach().cpu().numpy()
-                    ),
-                    "l1_fact_bias": (
-                        l1_layer.bias.detach().cpu().numpy()[: self.l2_size + 1]
-                        if l1_layer.bias is not None
-                        and l1_layer.bias.shape[0] > self.l2_size
-                        else (
-                            l1_layer.bias.detach().cpu().numpy()
-                            if l1_layer.bias is not None
-                            else np.zeros(
-                                min(self.l2_size + 1, l1_layer.weight.shape[0])
-                            )
-                        )
-                    ),
-                    "l2_weight": l2_layer.weight.detach().cpu().numpy(),
-                    "l2_bias": (
-                        l2_layer.bias.detach().cpu().numpy()
-                        if l2_layer.bias is not None
-                        else np.zeros(l2_layer.weight.shape[0])
-                    ),
-                    "output_weight": output_layer.weight.detach().cpu().numpy(),
-                    "output_bias": (
-                        output_layer.bias.detach().cpu().numpy()
-                        if output_layer.bias is not None
-                        else np.zeros(output_layer.weight.shape[0])
-                    ),
-                }
-                quantized_data[f"layer_stack_{i}"] = layer_stack_data
+        for i, layer in enumerate(linear_layers):
+            layer_data = {
+                "weight": layer.weight.detach().cpu().numpy(),
+                "bias": (
+                    layer.bias.detach().cpu().numpy()
+                    if layer.bias is not None
+                    else np.zeros(layer.weight.shape[0])
+                ),
+                "scale": 64.0,  # Default scale for quantization
+            }
+            classifier_data["layers"].append(layer_data)
+
+        quantized_data["classifier"] = classifier_data
 
         return quantized_data
 
@@ -613,7 +581,7 @@ class NNUE(nn.Module):
 
         return batch_feature_indices, batch_feature_values
 
-    def forward(self, images: torch.Tensor, layer_stack_indices: torch.Tensor):
+    def forward(self, images: torch.Tensor):
         """Forward pass from images to evaluation scores."""
         # Convolution: (B, 3, H, W) -> (B, conv_out_channels, grid_h, grid_w)
         x = self.conv(images)
@@ -635,18 +603,21 @@ class NNUE(nn.Module):
         # Transform sparse features to dense representation
         features = self.input(feature_indices, feature_values)
 
-        # Clamp to [0, 1]
+        # Clamp to [0, 1] (keep this - it's part of quantization preparation)
         l0_ = torch.clamp(features, 0.0, 1.0)
 
-        # Split into halves and apply squared activation (original NNUE approach)
+        # Apply pairwise multiplication (core NNUE technique for feature interactions)
+        # Split features in half and multiply element-wise to create quadratic interactions
         l0_s = torch.split(l0_, self.l1_size // 2, dim=1)
-        l0_s1 = l0_s[0] * l0_s[1]  # Element-wise multiplication
+        l0_s1 = (
+            l0_s[0] * l0_s[1]
+        )  # Element-wise multiplication creates feature interactions
 
-        # Concatenate original and squared parts
+        # Concatenate multiplied features with original half (standard NNUE approach)
         l0_ = torch.cat([l0_s1, l0_s[0]], dim=1) * (127 / 128)
 
-        # Pass through layer stacks
-        x = self.layer_stacks(l0_, layer_stack_indices)
+        # Pass through simple classifier
+        x = self.classifier(l0_)
 
         return x
 
@@ -690,45 +661,29 @@ class FeatureTransformer(nn.Module):
         return output
 
 
-class LayerStacks(nn.Module):
-    """Layer stacks for NNUE evaluation."""
+class SimpleClassifier(nn.Module):
+    """Simple classifier for NNUE computer vision (replaces chess-specific layer stacks)."""
 
     def __init__(
         self,
         l1_size: int,
         l2_size: int,
         l3_size: int,
-        num_buckets: int,
         num_classes: int,
     ):
         super().__init__()
-        self.num_buckets = num_buckets
         self.num_classes = num_classes
 
-        # Create multiple layer stacks (buckets)
-        self.stacks = nn.ModuleList()
-        for _ in range(num_buckets):
-            stack = nn.Sequential(
-                nn.Linear(l1_size, l2_size),
-                nn.ReLU(),
-                nn.Linear(l2_size, l3_size),
-                nn.ReLU(),
-                nn.Linear(l3_size, num_classes),
-            )
-            self.stacks.append(stack)
+        # Single classifier network (no buckets needed for vision)
+        # Input size is l1_size because of pairwise multiplication: l1_size/2 * l1_size/2 + l1_size/2 = l1_size
+        self.classifier = nn.Sequential(
+            nn.Linear(l1_size, l2_size),
+            nn.ReLU(),
+            nn.Linear(l2_size, l3_size),
+            nn.ReLU(),
+            nn.Linear(l3_size, num_classes),
+        )
 
-    def forward(self, x: torch.Tensor, bucket_indices: torch.Tensor):
-        """Forward pass through selected layer stacks."""
-        batch_size = x.shape[0]
-        outputs = []
-
-        for b in range(batch_size):
-            bucket_idx = bucket_indices[b].item()
-            bucket_idx = max(
-                0, min(bucket_idx, self.num_buckets - 1)
-            )  # Clamp to valid range
-
-            stack_output = self.stacks[bucket_idx](x[b : b + 1])
-            outputs.append(stack_output)
-
-        return torch.cat(outputs, dim=0)
+    def forward(self, x: torch.Tensor):
+        """Forward pass through the classifier."""
+        return self.classifier(x)

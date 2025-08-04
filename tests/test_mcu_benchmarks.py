@@ -53,7 +53,7 @@ def small_nnue_model(device):
         l1_size=64,
         l2_size=8,
         l3_size=16,
-        num_ls_buckets=2,
+        num_classes=10,
         visual_threshold=0.5,
     )
     model.to(device)
@@ -775,7 +775,7 @@ class TestErrorHandling:
             l1_size=8,
             l2_size=2,
             l3_size=4,
-            num_ls_buckets=1,
+            num_classes=10,
         )
         tiny_model.to(device).eval()
 
@@ -838,7 +838,7 @@ class TestBenchmarkValidation:
             grid_size=4, num_features_per_square=4
         )  # 64 features
         model = NNUE(
-            feature_set=feature_set, l1_size=32, l2_size=4, l3_size=8, num_ls_buckets=1
+            feature_set=feature_set, l1_size=32, l2_size=4, l3_size=8, num_classes=10
         )
         model.to(device).eval()
 

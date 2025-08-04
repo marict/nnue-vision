@@ -37,7 +37,7 @@ def create_example_model():
         l1_size=256,  # Smaller for demo
         l2_size=8,
         l3_size=16,
-        num_ls_buckets=4,
+        num_classes=10,
         visual_threshold=0.5,
     )
 

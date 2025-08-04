@@ -9,7 +9,6 @@ import this file quickly.
 name = "nnue_vision-gpu"
 
 # NNUE-specific settings
-num_ls_buckets = 8  # Standard bucket count
 visual_threshold = 0.0
 
 # Dataset and model settings
@@ -48,4 +47,4 @@ keep_alive = False  # Terminate RunPod instance after training completes
 
 # Logging backends
 log_dir = "logs"
-project_name = "nnue-vision-train"
+project_name = "nnue_training"

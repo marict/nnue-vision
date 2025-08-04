@@ -29,7 +29,7 @@ def trained_model_checkpoint(device, tmp_path):
     # Create a small model
     feature_set = GridFeatureSet(grid_size=4, num_features_per_square=8)
     model = NNUE(
-        feature_set=feature_set, l1_size=64, l2_size=8, l3_size=16, num_ls_buckets=2
+        feature_set=feature_set, l1_size=64, l2_size=8, l3_size=16, num_classes=10
     )
     model.to(device)
 
@@ -370,7 +370,7 @@ class TestBenchmarkRobustness:
         # Create tiny model
         feature_set = GridFeatureSet(grid_size=2, num_features_per_square=2)
         tiny_model = NNUE(
-            feature_set=feature_set, l1_size=8, l2_size=2, l3_size=4, num_ls_buckets=1
+            feature_set=feature_set, l1_size=8, l2_size=2, l3_size=4, num_classes=10
         )
         tiny_model.to(device).eval()
 
@@ -392,7 +392,7 @@ class TestBenchmarkRobustness:
             l1_size=256,
             l2_size=32,
             l3_size=64,
-            num_ls_buckets=4,
+            num_classes=10,
         )
         large_model.to(device).eval()
 
