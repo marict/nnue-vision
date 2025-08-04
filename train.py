@@ -230,12 +230,41 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
         )
         early_log("✅ Data loaders created successfully")
 
-        # Setup optimizer
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=getattr(config, "learning_rate", 1e-3),
-            weight_decay=getattr(config, "weight_decay", 5e-4),
-        )
+        # Setup optimizer (support both Adam and SGD like EtinyNet)
+        optimizer_type = getattr(config, "optimizer_type", "adam").lower()
+        learning_rate = getattr(config, "learning_rate", 1e-3)
+        weight_decay = getattr(config, "weight_decay", 5e-4)
+
+        if optimizer_type == "sgd":
+            momentum = getattr(config, "momentum", 0.9)
+            optimizer = torch.optim.SGD(
+                model.parameters(),
+                lr=learning_rate,
+                momentum=momentum,
+                weight_decay=weight_decay,
+            )
+            early_log(
+                f"🔧 Using SGD optimizer (lr={learning_rate}, momentum={momentum}, wd={weight_decay})"
+            )
+        else:  # default to Adam
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=learning_rate,
+                weight_decay=weight_decay,
+            )
+            early_log(
+                f"🔧 Using Adam optimizer (lr={learning_rate}, wd={weight_decay})"
+            )
+
+        # Setup learning rate scheduler (like EtinyNet for dynamic learning)
+        scheduler = None
+        if getattr(config, "use_cosine_scheduler", False):
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=getattr(config, "max_epochs", 100)
+            )
+            early_log(
+                f"📈 Using CosineAnnealingLR scheduler (T_max={getattr(config, 'max_epochs', 100)})"
+            )
 
         # Setup wandb logger
         log_dir = getattr(config, "log_dir", "logs")
@@ -345,6 +374,10 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                             early_log(
                                 f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}, time={batch_time:.3f}s"
                             )
+
+            # Update learning rate (like EtinyNet)
+            if scheduler is not None:
+                scheduler.step()
 
             # Average training metrics
             if num_batches > 0:
