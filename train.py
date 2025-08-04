@@ -334,8 +334,39 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 # Forward pass and loss computation
                 loss = compute_nnue_loss(model, nnue_batch)
 
+                # Check for NaN loss - fail fast with debugging info
+                if torch.isnan(loss) or torch.isinf(loss):
+                    early_log(
+                        f"❌ NaN/Inf loss detected at epoch {epoch}, batch {batch_idx}"
+                    )
+                    early_log(f"   Loss value: {loss.item()}")
+                    early_log(f"   Learning rate: {optimizer.param_groups[0]['lr']}")
+
+                    # Log model weight stats for debugging
+                    total_norm = 0
+                    for name, param in model.named_parameters():
+                        if param.grad is not None:
+                            param_norm = param.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                            if torch.isnan(param_norm) or torch.isinf(param_norm):
+                                early_log(f"   NaN/Inf in {name}: norm={param_norm}")
+                    total_norm = total_norm ** (1.0 / 2)
+                    early_log(f"   Total parameter norm: {total_norm}")
+
+                    raise ValueError(
+                        f"NaN/Inf loss encountered at epoch {epoch}, batch {batch_idx}. "
+                        f"Loss: {loss.item()}, LR: {optimizer.param_groups[0]['lr']}"
+                    )
+
                 # Backward pass
                 loss.backward()
+
+                # Optional: Gradient clipping for stability
+                if hasattr(config, "max_grad_norm") and config.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), config.max_grad_norm
+                    )
+
                 optimizer.step()
 
                 # Accumulate metrics

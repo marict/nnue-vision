@@ -23,20 +23,21 @@ l2_size = 128  # Expanded bottleneck
 l3_size = 32  # Second classifier hidden layer
 input_size = 32  # Model architecture: 32x32 image size
 
-# Training settings - EXACT EtinyNet setup
-learning_rate = 0.5  # EtinyNet's aggressive initial LR
+# Training settings - NNUE-optimized (post-quantization constraint removal)
+learning_rate = 0.01  # Conservative for NNUE stability (was 0.5, caused NaN)
 weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam
 subset = 1.0  # Use full dataset
 max_epochs = 300  # EtinyNet duration
 patience = 999999  # Let cosine schedule finish
+max_grad_norm = 1.0  # Gradient clipping to prevent exploding gradients
 
 # Learning rate schedule - EtinyNet's secret sauce
 use_cosine_scheduler = True  # Enable cosine annealing
 
 use_augmentation = True
-augmentation_strength = "heavy"
+augmentation_strength = "light"  # Conservative augmentation for stability
 
 # System settings
 accelerator = "auto"
@@ -59,11 +60,13 @@ log_dir = "logs"
 project_name = "nnue_training"
 
 # Debug info
-print("⚡ NNUE + EtinyNet Exact Setup Config Loaded:")
+print("🛡️ NNUE Stable Training Config Loaded:")
 print(f"  • Optimizer: SGD with momentum={momentum} (like EtinyNet)")
-print(f"  • Learning rate: {learning_rate} → 0 (cosine annealing)")
+print(f"  • Learning rate: {learning_rate} → 0 (cosine annealing, conservative)")
+print(f"  • Gradient clipping: {max_grad_norm} (prevent NaN)")
 print(f"  • Weight decay: {weight_decay} (EtinyNet value)")
 print(f"  • Max epochs: {max_epochs} (EtinyNet duration)")
-print(f"  • Batch size: {batch_size} (EtinyNet efficiency)")
-print(f"  • L2 bottleneck: {l2_size} (NNUE architecture advantage)")
-print("🚀 Testing: Can NNUE match EtinyNet with exact same training?")
+print(f"  • Batch size: {batch_size} (efficiency)")
+print(f"  • Augmentation: {augmentation_strength} (stable)")
+print(f"  • L2 bottleneck: {l2_size} (8.5x expansion)")
+print("🎯 Goal: Stable NNUE training without NaN losses!")
