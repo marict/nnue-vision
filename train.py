@@ -320,7 +320,7 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 # Compute training metrics periodically
                 if batch_idx % log_interval == 0:
                     with torch.no_grad():
-                        outputs = model(nnue_batch[0], nnue_batch[3])
+                        outputs = model(nnue_batch[0])
                         batch_metrics = compute_metrics(
                             outputs, nnue_batch[1], model.num_classes
                         )
