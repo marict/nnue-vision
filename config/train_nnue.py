@@ -38,7 +38,7 @@ max_grad_norm = 1.0
 use_cosine_scheduler = True  # Enable cosine annealing
 
 use_augmentation = True
-augmentation_strength = "light"  # Conservative augmentation for stability
+augmentation_strength = "heavy"  # Conservative augmentation for stability
 
 # System settings
 accelerator = "auto"
