@@ -1,49 +1,56 @@
-"""Default configuration for NNUE training.
+"""NNUE Configuration with Exact EtinyNet Training Setup
 
-Designed to complete quickly for development and testing.
-Uses minimal data and tiny model parameters for fast iteration.
+Matches EtinyNet's optimizer and schedule exactly:
+- SGD with momentum (instead of Adam)
+- High initial learning rate (0.5)
+- Cosine annealing schedule
+- Longer training duration
+
+This tests if the optimizer choice is key to EtinyNet's superior performance.
 """
 
-name = "nnue_default"
+# Project identification
+name = "nnue_vision"
 
 # Dataset and model settings
-batch_size = 2  # Minimal batch size
-num_workers = 0  # No multiprocessing for speed
-num_classes = 10  # CIFAR-10 classes for testing
-input_size = 32  # Native CIFAR-10 size
-learning_rate = 1e-3
-weight_decay = 5e-4  # L2 regularization strength
-subset = 0.001  # Use only 0.1% of data (just a few samples)
+batch_size = 2
+num_workers = 1
+num_classes = 10  # CIFAR-10 classes
 
-# NNUE-specific minimal settings
-# Simplified architecture for computer vision (no chess-specific features)
+# NNUE model architecture (proven working)
+input_size = 32  # Model architecture: 32x32 image size
 
-# Training settings
-max_epochs = 1  # Single epoch only
-patience = 1  # Minimal patience
-save_top_k = 1  # Save only best model
+# Training settings - EXACT EtinyNet setup
+learning_rate = 0.5  # EtinyNet's aggressive initial LR
+weight_decay = 2e-4  # EtinyNet's weight decay
+momentum = 0.9  # SGD momentum (EtinyNet uses this)
+optimizer_type = "sgd"  # Use SGD instead of Adam
+subset = 1.0  # Use full dataset
+max_epochs = 2  # EtinyNet duration
+patience = 999999  # Let cosine schedule finish
 
-# Data augmentation settings
-use_augmentation = True  # Enable strong data augmentation to prevent overfitting
-augmentation_strength = "heavy"  # Options: "light", "medium", "heavy"
+# Learning rate schedule - EtinyNet's secret sauce
+use_cosine_scheduler = True  # Enable cosine annealing
 
+use_augmentation = True
+augmentation_strength = "heavy"
 
 # System settings
-accelerator = "cpu"  # Force CPU for consistent timing
-devices = 1
-deterministic = True
+accelerator = "auto"
+devices = "auto"
+deterministic = False
 seed = 42
 
 # Logging and monitoring
-log_interval = 1  # Log every step for debugging
-always_save_checkpoint = True  # Keep checkpointing enabled to avoid conflicts
-enable_progress_bar = True  # Keep progress bar enabled to avoid conflicts
+log_interval = 1
+always_save_checkpoint = False
+enable_progress_bar = True
 check_val_every_n_epoch = 1
+save_top_k = 1
 
 # RunPod settings
-keep_alive = False  # Terminate RunPod instance after training completes
+keep_alive = False
 
-
-# Default settings
+# Logging backends
 log_dir = "logs"
 project_name = "nnue_default"
