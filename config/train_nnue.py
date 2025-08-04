@@ -24,7 +24,7 @@ l3_size = 32  # Second classifier hidden layer
 input_size = 32  # Model architecture: 32x32 image size
 
 # Training settings - NNUE-optimized (post-quantization constraint removal)
-learning_rate = 0.01  # Conservative for NNUE stability (was 0.5, caused NaN)
+learning_rate = 0.001  # Very conservative for STE threshold stability (was 0.01)
 weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam

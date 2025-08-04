@@ -503,7 +503,8 @@ class NNUE(nn.Module):
         self.nnue2score = nn.Parameter(torch.tensor(600.0))
 
         # Learnable binary threshold for STE (per-channel)
-        self.visual_threshold = nn.Parameter(torch.zeros(conv_out_channels))
+        # Initialize to small positive values to avoid gradient explosion
+        self.visual_threshold = nn.Parameter(torch.full((conv_out_channels,), 0.1))
 
     def _calculate_conv_params(
         self, input_size, target_grid_size, num_features_per_square
