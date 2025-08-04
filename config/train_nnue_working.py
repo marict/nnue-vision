@@ -29,7 +29,7 @@ learning_rate = 1e-3  # Standard Adam LR (not aggressive 0.5)
 weight_decay = 5e-4  # Match local test weight decay
 subset = 1.0  # Use full dataset
 max_epochs = 100  # Reasonable for testing (can increase later)
-patience = 20  # Early stopping if no improvement
+patience = 999999  # Early stopping if no improvement
 
 # Data augmentation - LIGHT (key fix!)
 use_augmentation = True
