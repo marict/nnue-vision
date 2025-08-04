@@ -15,7 +15,7 @@ num_classes = 10  # CIFAR-10 classes
 
 # NNUE model architecture
 l1_size = 1024  # Feature transformer output size
-l2_size = 15  # First classifier hidden layer
+l2_size = 128  # Expanded bottleneck (8.5x larger, ~956K total params)
 l3_size = 32  # Second classifier hidden layer
 input_size = 32  # Native CIFAR-10 image size (was tuple, now int for model)
 learning_rate = 0.5  # Initial LR for cosine annealing (was 3e-4 * (1024 / 64))
