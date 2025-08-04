@@ -752,16 +752,18 @@ void NNUEEvaluator::update_features(const std::vector<int>& added, const std::ve
 // ===== EtinyNet Implementation =====
 
 // LinearDepthwiseBlock implementation
-LinearDepthwiseBlock::LinearDepthwiseBlock() 
-    : dconv1_scale(64.0f), pconv_scale(64.0f), dconv2_scale(64.0f), pconv_out_scale(64.0f),
+LinearDepthwiseBlock::LinearDepthwiseBlock()
+     : pw_expand_scale(64.0f), dw_conv_scale(64.0f), pw_project_scale(64.0f),
       in_channels(0), mid_channels(0), out_channels(0), stride(1) {}
 
 bool LinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
-    // Read scales
-    file.read(reinterpret_cast<char*>(&dconv1_scale), sizeof(float));
-    file.read(reinterpret_cast<char*>(&pconv_scale), sizeof(float));
-    file.read(reinterpret_cast<char*>(&dconv2_scale), sizeof(float));
-    file.read(reinterpret_cast<char*>(&pconv_out_scale), sizeof(float));
+    // Read scales (matches new architecture: pw_expand, dw_conv, pw_project)
+    file.read(reinterpret_cast<char*>(&pw_expand_scale), sizeof(float));
+    file.read(reinterpret_cast<char*>(&dw_conv_scale), sizeof(float));
+    file.read(reinterpret_cast<char*>(&pw_project_scale), sizeof(float));
+    // Skip unused scale (for backwards compatibility)
+    float unused_scale;
+    file.read(reinterpret_cast<char*>(&unused_scale), sizeof(float));
     
     // Read dimensions
     file.read(reinterpret_cast<char*>(&in_channels), sizeof(uint32_t));
@@ -769,170 +771,130 @@ bool LinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&out_channels), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&stride), sizeof(uint32_t));
     
-    // Read first depthwise conv weights (3x3)
-    int dconv1_weight_count = in_channels * 9;  // 3x3 kernel
-    dconv1_weights.resize(dconv1_weight_count);
-    file.read(reinterpret_cast<char*>(dconv1_weights.data()), dconv1_weight_count);
+    // Read pointwise expansion weights (1x1 conv: in_channels -> mid_channels)
+    int pw_expand_weight_count = mid_channels * in_channels;
+    pw_expand_weights.resize(pw_expand_weight_count);
+    file.read(reinterpret_cast<char*>(pw_expand_weights.data()), pw_expand_weight_count);
     
-    // Read first pointwise conv weights
-    int pconv_weight_count = mid_channels * in_channels;
-    pconv_weights.resize(pconv_weight_count);
-    file.read(reinterpret_cast<char*>(pconv_weights.data()), pconv_weight_count);
-    
-    // Read first pointwise conv biases
-    uint32_t pconv_bias_count;
-    file.read(reinterpret_cast<char*>(&pconv_bias_count), sizeof(uint32_t));
-    if (pconv_bias_count != static_cast<uint32_t>(mid_channels)) {
-        std::cerr << "Linear block pconv bias count mismatch" << std::endl;
+    // Read pointwise expansion biases  
+    uint32_t pw_expand_bias_count;
+    file.read(reinterpret_cast<char*>(&pw_expand_bias_count), sizeof(uint32_t));
+    if (pw_expand_bias_count != static_cast<uint32_t>(mid_channels)) {
+        std::cerr << "Linear block pw_expand bias count mismatch" << std::endl;
         return false;
     }
-    pconv_biases.resize(pconv_bias_count);
-    file.read(reinterpret_cast<char*>(pconv_biases.data()), pconv_bias_count * sizeof(int32_t));
+    pw_expand_biases.resize(pw_expand_bias_count);
+    file.read(reinterpret_cast<char*>(pw_expand_biases.data()), pw_expand_bias_count * sizeof(int32_t));
     
-    // Read second depthwise conv weights (3x3)
-    int dconv2_weight_count = mid_channels * 9;  // 3x3 kernel
-    dconv2_weights.resize(dconv2_weight_count);
-    file.read(reinterpret_cast<char*>(dconv2_weights.data()), dconv2_weight_count);
+    // Read depthwise conv weights (3x3, groups=mid_channels)
+    int dw_conv_weight_count = mid_channels * 9;  // 3x3 kernel per channel
+    dw_conv_weights.resize(dw_conv_weight_count);
+    file.read(reinterpret_cast<char*>(dw_conv_weights.data()), dw_conv_weight_count);
     
-    // Read output pointwise conv weights
-    int pconv_out_weight_count = out_channels * mid_channels;
-    pconv_out_weights.resize(pconv_out_weight_count);
-    file.read(reinterpret_cast<char*>(pconv_out_weights.data()), pconv_out_weight_count);
+    // Read pointwise projection weights (1x1 conv: mid_channels -> out_channels)
+    int pw_project_weight_count = out_channels * mid_channels;
+    pw_project_weights.resize(pw_project_weight_count);
+    file.read(reinterpret_cast<char*>(pw_project_weights.data()), pw_project_weight_count);
     
-    // Read output pointwise conv biases
-    uint32_t pconv_out_bias_count;
-    file.read(reinterpret_cast<char*>(&pconv_out_bias_count), sizeof(uint32_t));
-    if (pconv_out_bias_count != static_cast<uint32_t>(out_channels)) {
-        std::cerr << "Linear block pconv_out bias count mismatch" << std::endl;
-        return false;
-    }
-    pconv_out_biases.resize(pconv_out_bias_count);
-    file.read(reinterpret_cast<char*>(pconv_out_biases.data()), pconv_out_bias_count * sizeof(int32_t));
+    // Skip unused bias count and data (for backwards compatibility)
+    uint32_t unused_bias_count;
+    file.read(reinterpret_cast<char*>(&unused_bias_count), sizeof(uint32_t));
+    file.seekg(unused_bias_count * sizeof(int32_t), std::ios::cur);
     
     return file.good();
 }
 
 void LinearDepthwiseBlock::forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool) const {
-    // Calculate intermediate dimensions
-    int h1 = (input_h - 3 + 2) / stride + 1;  // After first depthwise conv
-    int w1 = (input_w - 3 + 2) / stride + 1;
+    // Calculate output dimensions after depthwise conv (the only layer that can change spatial size)
+    int out_h = (input_h - 3 + 2) / stride + 1;  // After depthwise conv with padding=1
+    int out_w = (input_w - 3 + 2) / stride + 1;
     
     // Use memory pool for temporary buffers if provided
-    size_t dconv1_size = h1 * w1 * in_channels;
-    size_t pconv_size = h1 * w1 * mid_channels;
-    size_t dconv2_size = h1 * w1 * mid_channels;
+    size_t pw_expand_size = input_h * input_w * mid_channels;  // After pointwise expansion
+    size_t dw_conv_size = out_h * out_w * mid_channels;       // After depthwise conv
     
-    std::vector<int8_t> local_dconv1, local_pconv, local_dconv2;
-    int8_t* dconv1_output;
-    int8_t* pconv_output;
-    int8_t* dconv2_output;
+    std::vector<int8_t> local_pw_expand, local_dw_conv;
+    int8_t* pw_expand_output;
+    int8_t* dw_conv_output;
     
-    std::unique_ptr<MemoryPool::BufferLock> pool_buffer1, pool_buffer2, pool_buffer3;
+    std::unique_ptr<MemoryPool::BufferLock> pool_buffer1, pool_buffer2;
     if (pool) {
-        pool_buffer1 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(dconv1_size));
-        pool_buffer2 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(pconv_size));
-        pool_buffer3 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(dconv2_size));
-        dconv1_output = pool_buffer1->get();
-        pconv_output = pool_buffer2->get();
-        dconv2_output = pool_buffer3->get();
+        pool_buffer1 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(pw_expand_size));
+        pool_buffer2 = std::make_unique<MemoryPool::BufferLock>(pool->get_buffer_lock(dw_conv_size));
+        pw_expand_output = pool_buffer1->get();
+        dw_conv_output = pool_buffer2->get();
     } else {
-        local_dconv1.resize(dconv1_size);
-        local_pconv.resize(pconv_size);
-        local_dconv2.resize(dconv2_size);
-        dconv1_output = local_dconv1.data();
-        pconv_output = local_pconv.data();
-        dconv2_output = local_dconv2.data();
+        local_pw_expand.resize(pw_expand_size);
+        local_dw_conv.resize(dw_conv_size);
+        pw_expand_output = local_pw_expand.data();
+        dw_conv_output = local_dw_conv.data();
     }
     
-    // 1. First depthwise conv (no activation - linear)
-    for (int c = 0; c < in_channels; ++c) {
-        for (int out_h = 0; out_h < h1; ++out_h) {
-            for (int out_w = 0; out_w < w1; ++out_w) {
-                int32_t acc = 0;
-                
-                for (int kh = 0; kh < 3; ++kh) {
-                    for (int kw = 0; kw < 3; ++kw) {
-                        int in_h = out_h * stride + kh - 1;  // padding=1
-                        int in_w = out_w * stride + kw - 1;
-                        
-                        if (in_h >= 0 && in_h < input_h && in_w >= 0 && in_w < input_w) {
-                            int input_idx = (in_h * input_w + in_w) * in_channels + c;
-                            int weight_idx = (c * 3 + kh) * 3 + kw;
-                            acc += static_cast<int32_t>(input[input_idx]) * static_cast<int32_t>(dconv1_weights[weight_idx]);
-                        }
-                    }
-                }
-                
-                int output_idx = (out_h * w1 + out_w) * in_channels + c;
-                dconv1_output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(dconv1_scale))));
-            }
-        }
-    }
-    
-    // 2. Pointwise conv with ReLU
+    // 1. Pointwise expansion (1x1 conv): in_channels -> mid_channels with ReLU6
     for (int out_c = 0; out_c < mid_channels; ++out_c) {
-        for (int h = 0; h < h1; ++h) {
-            for (int w = 0; w < w1; ++w) {
-                int32_t acc = pconv_biases[out_c];
+        for (int h = 0; h < input_h; ++h) {
+            for (int w = 0; w < input_w; ++w) {
+                int32_t acc = pw_expand_biases[out_c];
                 
                 for (int in_c = 0; in_c < in_channels; ++in_c) {
-                    int input_idx = (h * w1 + w) * in_channels + in_c;
+                    int input_idx = (h * input_w + w) * in_channels + in_c;
                     int weight_idx = out_c * in_channels + in_c;
-                    acc += static_cast<int32_t>(dconv1_output[input_idx]) * static_cast<int32_t>(pconv_weights[weight_idx]);
+                    acc += static_cast<int32_t>(input[input_idx]) * static_cast<int32_t>(pw_expand_weights[weight_idx]);
                 }
                 
-                int result = acc / static_cast<int32_t>(pconv_scale);
-                result = std::max(0, result);  // ReLU activation
+                int result = acc / static_cast<int32_t>(pw_expand_scale);
+                result = std::max(0, std::min(6, result));  // ReLU6 activation
                 
-                int output_idx = (h * w1 + w) * mid_channels + out_c;
-                pconv_output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, result)));
+                int output_idx = (h * input_w + w) * mid_channels + out_c;
+                pw_expand_output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, result)));
             }
         }
     }
     
-    // 3. Second depthwise conv with ReLU
+    // 2. Depthwise conv (3x3, groups=mid_channels): mid_channels -> mid_channels with ReLU6
     for (int c = 0; c < mid_channels; ++c) {
-        for (int out_h = 0; out_h < h1; ++out_h) {
-            for (int out_w = 0; out_w < w1; ++out_w) {
+        for (int y = 0; y < out_h; ++y) {
+            for (int x = 0; x < out_w; ++x) {
                 int32_t acc = 0;
                 
                 for (int kh = 0; kh < 3; ++kh) {
                     for (int kw = 0; kw < 3; ++kw) {
-                        int in_h = out_h + kh - 1;  // padding=1, stride=1
-                        int in_w = out_w + kw - 1;
+                        int in_y = y * stride + kh - 1;  // padding=1
+                        int in_x = x * stride + kw - 1;
                         
-                        if (in_h >= 0 && in_h < h1 && in_w >= 0 && in_w < w1) {
-                            int input_idx = (in_h * w1 + in_w) * mid_channels + c;
+                        if (in_y >= 0 && in_y < input_h && in_x >= 0 && in_x < input_w) {
+                            int input_idx = (in_y * input_w + in_x) * mid_channels + c;
                             int weight_idx = (c * 3 + kh) * 3 + kw;
-                            acc += static_cast<int32_t>(pconv_output[input_idx]) * static_cast<int32_t>(dconv2_weights[weight_idx]);
+                            acc += static_cast<int32_t>(pw_expand_output[input_idx]) * static_cast<int32_t>(dw_conv_weights[weight_idx]);
                         }
                     }
                 }
                 
-                int result = acc / static_cast<int32_t>(dconv2_scale);
-                result = std::max(0, result);  // ReLU activation
+                int result = acc / static_cast<int32_t>(dw_conv_scale);
+                result = std::max(0, std::min(6, result));  // ReLU6 activation
                 
-                int output_idx = (out_h * w1 + out_w) * mid_channels + c;
-                dconv2_output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, result)));
+                int output_idx = (y * out_w + x) * mid_channels + c;
+                dw_conv_output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, result)));
             }
         }
     }
     
-    // 4. Final pointwise conv (no activation)
+    // 3. Pointwise projection (1x1 conv): mid_channels -> out_channels (no activation)
     for (int out_c = 0; out_c < out_channels; ++out_c) {
-        for (int h = 0; h < h1; ++h) {
-            for (int w = 0; w < w1; ++w) {
-                int32_t acc = pconv_out_biases[out_c];
+        for (int h = 0; h < out_h; ++h) {
+            for (int w = 0; w < out_w; ++w) {
+                int32_t acc = 0;  // No bias in PyTorch pw_project
                 
                 for (int in_c = 0; in_c < mid_channels; ++in_c) {
-                    int input_idx = (h * w1 + w) * mid_channels + in_c;
+                    int input_idx = (h * out_w + w) * mid_channels + in_c;
                     int weight_idx = out_c * mid_channels + in_c;
-                    acc += static_cast<int32_t>(dconv2_output[input_idx]) * static_cast<int32_t>(pconv_out_weights[weight_idx]);
+                    acc += static_cast<int32_t>(dw_conv_output[input_idx]) * static_cast<int32_t>(pw_project_weights[weight_idx]);
                 }
                 
-                int result = acc / static_cast<int32_t>(pconv_out_scale);
+                int result = acc / static_cast<int32_t>(pw_project_scale);
+                // No activation for projection layer
                 
-                int output_idx = (h * w1 + w) * out_channels + out_c;
+                int output_idx = (h * out_w + w) * out_channels + out_c;
                 output[output_idx] = static_cast<int8_t>(std::max(-127, std::min(127, result)));
             }
         }

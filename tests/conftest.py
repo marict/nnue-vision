@@ -28,6 +28,14 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+# Ignore GraphQL ByteString deprecation warnings (external library issue)
+warnings.filterwarnings(
+    "ignore",
+    message=r"'typing\.ByteString' is deprecated",
+    category=DeprecationWarning,
+    module="graphql",
+)
+
 # Ignore checkpoint directory already exists notice
 warnings.filterwarnings(
     "ignore",

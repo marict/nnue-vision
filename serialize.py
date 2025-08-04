@@ -107,13 +107,13 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
 
 
 def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
-    """Write quantized LinearDepthwiseBlock layer."""
+    """Write quantized LinearDepthwiseBlock layer (corrected to match Python architecture)."""
 
-    # Write scales for all 4 components (required by C++ loader)
-    f.write(struct.pack("<f", layer_data["depthwise_scale"]))  # dconv1_scale
-    f.write(struct.pack("<f", layer_data["pointwise_scale"]))  # pconv_scale
-    f.write(struct.pack("<f", layer_data["depthwise2_scale"]))  # dconv2_scale
-    f.write(struct.pack("<f", layer_data["pointwise_out_scale"]))  # pconv_out_scale
+    # Write scales for the 3 components (pw_expand, dw_conv, pw_project) + unused scale
+    f.write(struct.pack("<f", layer_data["pointwise_scale"]))  # pw_expand_scale
+    f.write(struct.pack("<f", layer_data["depthwise2_scale"]))  # dw_conv_scale
+    f.write(struct.pack("<f", layer_data["pointwise_out_scale"]))  # pw_project_scale
+    f.write(struct.pack("<f", 64.0))  # unused scale (for compatibility)
 
     # Write dimensions (required by C++ loader)
     pw_weight = layer_data["pointwise_weight"]
@@ -129,30 +129,31 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", out_channels))
     f.write(struct.pack("<I", stride))
 
-    # Write dconv1 weights (first depthwise conv)
-    dw1_weight = layer_data["depthwise_weight"]
-    f.write(dw1_weight.cpu().numpy().astype("i1").tobytes())
+    # Write pw_expand weights (pointwise expansion: in_channels -> mid_channels)
+    pw_expand_weight = layer_data[
+        "pointwise_weight"
+    ]  # This is actually pw_expand in our mapping
+    f.write(pw_expand_weight.cpu().numpy().astype("i1").tobytes())
 
-    # Write pconv weights (first pointwise conv)
-    f.write(pw_weight.cpu().numpy().astype("i1").tobytes())
+    # Write pw_expand biases
+    pw_expand_bias = layer_data["pointwise_bias"]
+    f.write(struct.pack("<I", pw_expand_bias.shape[0]))
+    f.write(pw_expand_bias.cpu().numpy().astype("<i4").tobytes())
 
-    # Write pconv biases
-    pw_bias = layer_data["pointwise_bias"]
-    f.write(struct.pack("<I", pw_bias.shape[0]))
-    f.write(pw_bias.cpu().numpy().astype("<i4").tobytes())
+    # Write dw_conv weights (depthwise conv: mid_channels -> mid_channels)
+    dw_conv_weight = layer_data[
+        "depthwise2_weight"
+    ]  # This is actually dw_conv in our mapping
+    f.write(dw_conv_weight.cpu().numpy().astype("i1").tobytes())
 
-    # Write dconv2 weights (second depthwise conv)
-    dw2_weight = layer_data["depthwise2_weight"]
-    f.write(dw2_weight.cpu().numpy().astype("i1").tobytes())
+    # Write pw_project weights (pointwise projection: mid_channels -> out_channels)
+    pw_project_weight = layer_data["pointwise_out_weight"]
+    f.write(pw_project_weight.cpu().numpy().astype("i1").tobytes())
 
-    # Write pconv_out weights (final pointwise conv)
-    pw_out_weight = layer_data["pointwise_out_weight"]
-    f.write(pw_out_weight.cpu().numpy().astype("i1").tobytes())
-
-    # Write pconv_out biases
-    pw_out_bias = layer_data["pointwise_out_bias"]
-    f.write(struct.pack("<I", pw_out_bias.shape[0]))
-    f.write(pw_out_bias.cpu().numpy().astype("<i4").tobytes())
+    # Write unused bias count and data (for backwards compatibility)
+    unused_bias = layer_data["pointwise_out_bias"]
+    f.write(struct.pack("<I", unused_bias.shape[0]))
+    f.write(unused_bias.cpu().numpy().astype("<i4").tobytes())
 
 
 def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -226,45 +227,43 @@ def quantize_linear_depthwise_block(block, scale=64.0):
     data["stride"] = actual_block.dw_conv.stride[0]
 
     # Our LinearDepthwiseBlock structure: pw_expand -> dw_conv -> pw_project
-    # Map to expected serialization format:
+    # Map correctly to serialization format:
 
-    # Quantize pointwise expansion (pw_expand) - maps to "depthwise" in serialization
+    # Quantize pointwise expansion (pw_expand): in_channels -> mid_channels
     pw_expand_weight = actual_block.pw_expand.weight.data
     pw_expand_weight_q = (
         torch.round(pw_expand_weight * scale).clamp(-127, 127).to(torch.int8)
     )
+    # pw_expand uses BatchNorm bias, but C++ engine expects explicit bias
+    mid_channels = pw_expand_weight.shape[0]
+    pw_expand_bias_q = torch.zeros(mid_channels, dtype=torch.int32)
 
-    data["depthwise_weight"] = pw_expand_weight_q
-    data["depthwise_scale"] = scale
-
-    # Quantize depthwise conv (dw_conv) - maps to "pointwise" in serialization
-    dw_weight = actual_block.dw_conv.weight.data
-    dw_weight_q = torch.round(dw_weight * scale).clamp(-127, 127).to(torch.int8)
-    # Note: depthwise conv doesn't have bias, so create zero bias
-    dw_bias_q = torch.zeros(dw_weight.shape[0], dtype=torch.int32)
-
-    data["pointwise_weight"] = dw_weight_q
-    data["pointwise_bias"] = dw_bias_q
+    data["pointwise_weight"] = pw_expand_weight_q  # pw_expand weights
+    data["pointwise_bias"] = pw_expand_bias_q  # pw_expand biases
     data["pointwise_scale"] = scale
 
-    # Quantize pointwise projection (pw_project) - maps to "depthwise2" in serialization
+    # Quantize depthwise conv (dw_conv): mid_channels -> mid_channels (groups=mid_channels)
+    dw_weight = actual_block.dw_conv.weight.data
+    dw_weight_q = torch.round(dw_weight * scale).clamp(-127, 127).to(torch.int8)
+
+    data["depthwise2_weight"] = dw_weight_q  # dw_conv weights
+    data["depthwise2_scale"] = scale
+
+    # Quantize pointwise projection (pw_project): mid_channels -> out_channels
     pw_project_weight = actual_block.pw_project.weight.data
     pw_project_weight_q = (
         torch.round(pw_project_weight * scale).clamp(-127, 127).to(torch.int8)
     )
-
-    data["depthwise2_weight"] = pw_project_weight_q
-    data["depthwise2_scale"] = scale
-
-    # Create dummy "pointwise_out" layer (not used in our architecture)
-    # Use identity mapping from pw_project output
+    # pw_project has no bias in PyTorch (uses BatchNorm)
     out_channels = pw_project_weight.shape[0]
-    pw_out_weight_q = torch.eye(out_channels, dtype=torch.int8)
-    pw_out_bias_q = torch.zeros(out_channels, dtype=torch.int32)
 
-    data["pointwise_out_weight"] = pw_out_weight_q
-    data["pointwise_out_bias"] = pw_out_bias_q
+    data["pointwise_out_weight"] = pw_project_weight_q  # pw_project weights
     data["pointwise_out_scale"] = scale
+
+    # Unused fields (for backwards compatibility)
+    data["depthwise_weight"] = torch.zeros((1, 1, 3, 3), dtype=torch.int8)  # Unused
+    data["depthwise_scale"] = scale
+    data["pointwise_out_bias"] = torch.zeros(out_channels, dtype=torch.int32)  # Unused
 
     return data
 

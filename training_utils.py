@@ -3,17 +3,14 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import random
 import runpy
 import shutil
-import string
 import subprocess
 import tempfile
 import time
 from ast import literal_eval
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import torch
 
@@ -346,8 +343,8 @@ def get_lr(it: int, *, cfg: BaseConfig) -> float:
 def get_checkpoint_filename(
     cfg: BaseConfig,
     iter_num: int,
-    model_name: str | None = None,
-    val_acc: float | None = None,
+    model_name: Optional[str] = None,
+    val_acc: Optional[float] = None,
 ) -> str:
     """Generate checkpoint filename based on config and iteration."""
     base_name = model_name if model_name else cfg.name

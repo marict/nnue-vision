@@ -394,24 +394,20 @@ struct LayerStack {
 // (DepthwiseSeparableConv support was removed – EtinyNet now uses only Conv + LB/DLB)
 
 // Linear Depthwise Block (LB) from EtinyNet paper
+// Architecture: pointwise_expand -> depthwise -> pointwise_project (matches PyTorch)
 struct LinearDepthwiseBlock {
-    // First depthwise conv (no activation after this)
-    AlignedVector<int8_t> dconv1_weights;
-    float dconv1_scale;
+    // Pointwise expansion (1x1 conv): in_channels -> mid_channels
+    AlignedVector<int8_t> pw_expand_weights;
+    AlignedVector<int32_t> pw_expand_biases;
+    float pw_expand_scale;
     
-    // Pointwise conv (with activation)
-    AlignedVector<int8_t> pconv_weights;
-    AlignedVector<int32_t> pconv_biases;
-    float pconv_scale;
+    // Depthwise conv (3x3 conv, groups=mid_channels): mid_channels -> mid_channels  
+    AlignedVector<int8_t> dw_conv_weights;
+    float dw_conv_scale;
     
-    // Second depthwise conv (with activation)
-    AlignedVector<int8_t> dconv2_weights;
-    float dconv2_scale;
-    
-    // Final pointwise conv (output)
-    AlignedVector<int8_t> pconv_out_weights;
-    AlignedVector<int32_t> pconv_out_biases;
-    float pconv_out_scale;
+    // Pointwise projection (1x1 conv): mid_channels -> out_channels
+    AlignedVector<int8_t> pw_project_weights;
+    float pw_project_scale;
     
     // Architecture parameters
     int in_channels;
@@ -422,7 +418,7 @@ struct LinearDepthwiseBlock {
     LinearDepthwiseBlock();
     ~LinearDepthwiseBlock() = default;
     
-    // Forward pass: dconv1 -> pconv+ReLU -> dconv2+ReLU -> pconv_out
+    // Forward pass: pw_expand+ReLU6 -> dw_conv+ReLU6 -> pw_project (matches PyTorch)
     void forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);

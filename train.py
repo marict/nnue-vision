@@ -324,8 +324,11 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             train_loss = 0.0
             train_metrics = {"acc": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
             num_batches = 0
+            train_batch_times = []
 
             for batch_idx, batch in enumerate(train_loader):
+                batch_start_time = time.time()
+
                 # Move batch to device
                 images, labels = batch
                 images, labels = images.to(device), labels.to(device)
@@ -347,6 +350,10 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
                 # Accumulate metrics
                 train_loss += loss.item()
+
+                # Track batch timing
+                batch_time = time.time() - batch_start_time
+                train_batch_times.append(batch_time)
 
                 # Compute training metrics periodically
                 if batch_idx % log_interval == 0:
@@ -373,7 +380,7 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
                         if batch_idx % (log_interval * 10) == 0:
                             early_log(
-                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}"
+                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}, time={batch_time:.3f}s"
                             )
 
             # Average training metrics
@@ -386,9 +393,12 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
             val_loss = 0.0
             val_outputs = []
             val_targets = []
+            val_batch_times = []
 
             with torch.no_grad():
                 for batch in val_loader:
+                    val_batch_start_time = time.time()
+
                     images, labels = batch
                     images, labels = images.to(device), labels.to(device)
 
@@ -405,11 +415,21 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                     val_outputs.append(outputs.cpu())
                     val_targets.append(nnue_batch[1].cpu())
 
+                    # Track validation batch timing
+                    val_batch_time = time.time() - val_batch_start_time
+                    val_batch_times.append(val_batch_time)
+
             # Compute validation metrics
             val_outputs = torch.cat(val_outputs)
             val_targets = torch.cat(val_targets)
             val_metrics = compute_metrics(val_outputs, val_targets, model.num_classes)
             val_loss /= len(val_loader)
+
+            # Calculate timing statistics
+            avg_train_batch_time = (
+                np.mean(train_batch_times) if train_batch_times else 0.0
+            )
+            avg_val_batch_time = np.mean(val_batch_times) if val_batch_times else 0.0
 
             # Log epoch results
             epoch_log = {
@@ -417,11 +437,10 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 "train/epoch_loss": train_loss / len(train_loader),
                 "train/epoch_acc": train_metrics["acc"],
                 "train/epoch_f1": train_metrics["f1"],
+                "train/avg_batch_time": avg_train_batch_time,
                 "val/loss": val_loss,
-                "val/acc": val_metrics["acc"],
                 "val/f1": val_metrics["f1"],
-                "val/precision": val_metrics["precision"],
-                "val/recall": val_metrics["recall"],
+                "val/avg_batch_time": avg_val_batch_time,
             }
 
             # Debug: Print what we're logging to wandb
@@ -430,7 +449,8 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
             early_log(
                 f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
-                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}"
+                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}, "
+                f"train_time={avg_train_batch_time:.3f}s/batch, val_time={avg_val_batch_time:.3f}s/batch"
             )
 
             # Save checkpoint if validation F1 improved
@@ -661,8 +681,11 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
             train_loss = 0.0
             train_metrics = {"acc": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
             num_batches = 0
+            train_batch_times = []
 
             for batch_idx, batch in enumerate(train_loader):
+                batch_start_time = time.time()
+
                 # Move batch to device
                 images, targets = batch
                 images, targets = images.to(device), targets.to(device)
@@ -680,6 +703,10 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
                 # Accumulate metrics
                 train_loss += loss.item()
+
+                # Track batch timing
+                batch_time = time.time() - batch_start_time
+                train_batch_times.append(batch_time)
 
                 # Compute training metrics periodically
                 if batch_idx % log_interval == 0:
@@ -705,7 +732,7 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
                         if batch_idx % (log_interval * 10) == 0:
                             early_log(
-                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}"
+                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}, time={batch_time:.3f}s"
                             )
 
             # Update learning rate
@@ -721,9 +748,12 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
             val_loss = 0.0
             val_outputs = []
             val_targets = []
+            val_batch_times = []
 
             with torch.no_grad():
                 for batch in val_loader:
+                    val_batch_start_time = time.time()
+
                     images, targets = batch
                     images, targets = images.to(device), targets.to(device)
 
@@ -734,11 +764,21 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                     val_outputs.append(outputs.cpu())
                     val_targets.append(targets.cpu().float())
 
+                    # Track validation batch timing
+                    val_batch_time = time.time() - val_batch_start_time
+                    val_batch_times.append(val_batch_time)
+
             # Compute validation metrics
             val_outputs = torch.cat(val_outputs)
             val_targets = torch.cat(val_targets)
             val_metrics = compute_metrics(val_outputs, val_targets, num_classes)
             val_loss /= len(val_loader)
+
+            # Calculate timing statistics
+            avg_train_batch_time = (
+                np.mean(train_batch_times) if train_batch_times else 0.0
+            )
+            avg_val_batch_time = np.mean(val_batch_times) if val_batch_times else 0.0
 
             # Log epoch results
             epoch_log = {
@@ -746,11 +786,10 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 "train/epoch_loss": train_loss / len(train_loader),
                 "train/epoch_acc": train_metrics["acc"],
                 "train/epoch_f1": train_metrics["f1"],
+                "train/avg_batch_time": avg_train_batch_time,
                 "val/loss": val_loss,
-                "val/acc": val_metrics["acc"],
                 "val/f1": val_metrics["f1"],
-                "val/precision": val_metrics["precision"],
-                "val/recall": val_metrics["recall"],
+                "val/avg_batch_time": avg_val_batch_time,
             }
 
             # Debug: Print what we're logging to wandb
@@ -759,7 +798,8 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
             early_log(
                 f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
-                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}"
+                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}, "
+                f"train_time={avg_train_batch_time:.3f}s/batch, val_time={avg_val_batch_time:.3f}s/batch"
             )
 
             # Save checkpoint if validation F1 improved

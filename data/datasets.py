@@ -168,8 +168,11 @@ class GenericVisionDataset(Dataset):
                     A.HorizontalFlip(p=0.5),
                     A.RandomRotate90(p=0.5),
                     A.Rotate(limit=15, p=0.3),
-                    A.ShiftScaleRotate(
-                        shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.3
+                    A.Affine(
+                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
+                        scale=(0.9, 1.1),
+                        rotate=(-15, 15),
+                        p=0.3,
                     ),
                     # Brightness/contrast augmentations
                     A.RandomBrightnessContrast(
@@ -218,8 +221,11 @@ class GenericVisionDataset(Dataset):
                     ),  # Extra flip probability (total becomes ~0.55)
                     A.RandomRotate90(p=0.1),  # Extra rotation probability
                     A.Rotate(limit=25, p=0.2),  # Stronger rotation
-                    A.ShiftScaleRotate(
-                        shift_limit=0.15, scale_limit=0.15, rotate_limit=25, p=0.2
+                    A.Affine(
+                        translate_percent={"x": (-0.15, 0.15), "y": (-0.15, 0.15)},
+                        scale=(0.85, 1.15),
+                        rotate=(-25, 25),
+                        p=0.2,
                     ),
                     # Additional strong brightness/contrast
                     A.RandomBrightnessContrast(
@@ -266,8 +272,11 @@ class GenericVisionDataset(Dataset):
                     A.HorizontalFlip(p=0.5),
                     A.RandomRotate90(p=0.5),
                     A.Rotate(limit=15, p=0.3),
-                    A.ShiftScaleRotate(
-                        shift_limit=0.1, scale_limit=0.1, rotate_limit=15, p=0.3
+                    A.Affine(
+                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
+                        scale=(0.9, 1.1),
+                        rotate=(-15, 15),
+                        p=0.3,
                     ),
                     # Brightness/contrast augmentations
                     A.RandomBrightnessContrast(

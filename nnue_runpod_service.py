@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import subprocess
+from typing import Optional
 
 import requests
 import runpod
@@ -92,8 +93,8 @@ def start_cloud_training(
     train_args: str,
     gpu_type: str = DEFAULT_GPU_TYPE,
     *,
-    api_key: str | None = None,
-    note: str | None = None,
+    api_key: Optional[str] = None,
+    note: Optional[str] = None,
     script_name: str = "train.py",
 ) -> str:
     """Launch RunPod GPU instance for NNUE-Vision training."""
@@ -194,7 +195,7 @@ def start_cloud_training(
     return pod_id
 
 
-def stop_runpod(pod_id: str | None = None, api_key: str | None = None) -> bool:
+def stop_runpod(pod_id: Optional[str] = None, api_key: Optional[str] = None) -> bool:
     """Stop the active RunPod instance."""
     pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
