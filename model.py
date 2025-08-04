@@ -12,21 +12,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class StraightThroughEstimator(torch.autograd.Function):
-    """Straight-Through Estimator for binary thresholding with continuous gradients."""
+class StraightThroughBinary(torch.autograd.Function):
+    """Straight-Through Estimator for binary activation with continuous gradients."""
 
     @staticmethod
     def forward(ctx, input, threshold=0.0):
         """Forward: Apply hard binary thresholding."""
-        # Save input and threshold for backward pass
+        # Save input for backward pass
         ctx.save_for_backward(input, threshold)
         # Apply hard threshold in forward pass (discrete output)
-        output = (input > threshold).float()
-        return output
+        binary_output = (input > threshold).float()
+        return binary_output
 
     @staticmethod
     def backward(ctx, grad_output):
-        """Backward: Pass gradients straight through for input, computed gradients for threshold."""
+        """Backward: Pass gradients straight through, ignoring discretization."""
         input, threshold = ctx.saved_tensors
 
         # Gradient w.r.t. input: straight-through (ignore discretization)
@@ -44,14 +44,19 @@ class StraightThroughEstimator(torch.autograd.Function):
                 * torch.sigmoid(k * (input - threshold))
                 * (1 - torch.sigmoid(k * (input - threshold)))
             )
-            grad_threshold = -(grad_output * sigmoid_grad).sum()
+            # Sum over batch and spatial dimensions, preserve channel dimension
+            # Input shape: [B, C, H, W], threshold shape: [1, C, 1, 1]
+            # Result should match threshold shape: [1, C, 1, 1]
+            grad_threshold = -(grad_output * sigmoid_grad).sum(
+                dim=(0, 2, 3), keepdim=True
+            )
 
         return grad_input, grad_threshold
 
 
-def straight_through_threshold(x, threshold=0.0):
-    """Apply STE binary thresholding: discrete forward, continuous backward."""
-    return StraightThroughEstimator.apply(x, threshold)
+def binary_activation_ste(x, threshold=0.0):
+    """Apply binary activation with STE: discrete {0,1} forward, continuous backward."""
+    return StraightThroughBinary.apply(x, threshold)
 
 
 # Loss parameters for NNUE
@@ -487,9 +492,6 @@ class NNUE(nn.Module):
             bias=False,
         )
 
-        # Hardtanh activation for feature extraction
-        self.hardtanh = nn.Hardtanh(min_val=-1.0, max_val=1.0)
-
         # Input layer (feature transformer)
         max_features = feature_set.num_features
         self.input = FeatureTransformer(max_features, l1_size)
@@ -500,8 +502,8 @@ class NNUE(nn.Module):
         # NNUE-to-score scaling factor
         self.nnue2score = nn.Parameter(torch.tensor(600.0))
 
-        # Learnable binary threshold for STE
-        self.visual_threshold = nn.Parameter(torch.tensor(0.0))
+        # Learnable binary threshold for STE (per-channel)
+        self.visual_threshold = nn.Parameter(torch.zeros(conv_out_channels))
 
     def _calculate_conv_params(
         self, input_size, target_grid_size, num_features_per_square
@@ -651,15 +653,12 @@ class NNUE(nn.Module):
         # Convolution: (B, 3, H, W) -> (B, conv_out_channels, grid_h, grid_w)
         x = self.conv(images)
 
-        # Apply Hardtanh activation
-        x = self.hardtanh(x)
-
-        # Apply binary thresholding with Straight-Through Estimator
+        # Apply binary activation with Straight-Through Estimator directly to conv output
         # Forward: discrete {0,1} features, Backward: continuous gradients
-        # Threshold is learnable parameter that can adapt to the task
-        features_for_nnue = straight_through_threshold(
-            x, threshold=self.visual_threshold
-        )
+        # Threshold is learnable parameter that can adapt per-channel
+        # Reshape threshold for broadcasting: (conv_out_channels,) -> (1, conv_out_channels, 1, 1)
+        threshold_expanded = self.visual_threshold.view(1, -1, 1, 1)
+        features_for_nnue = binary_activation_ste(x, threshold=threshold_expanded)
 
         # Convert to sparse features for NNUE
         feature_indices, feature_values = self._to_sparse_features(features_for_nnue)
