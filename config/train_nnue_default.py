@@ -20,14 +20,14 @@ num_classes = 10  # CIFAR-10 classes
 # NNUE model architecture (proven working)
 input_size = 32  # Model architecture: 32x32 image size
 
-# Training settings - EXACT EtinyNet setup
-learning_rate = 0.5  # EtinyNet's aggressive initial LR
+learning_rate = 0.01
 weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam
 subset = 1.0  # Use full dataset
 max_epochs = 2  # EtinyNet duration
 patience = 999999  # Let cosine schedule finish
+max_grad_norm = 1.0
 
 # Learning rate schedule - EtinyNet's secret sauce
 use_cosine_scheduler = True  # Enable cosine annealing
