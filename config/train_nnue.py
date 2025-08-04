@@ -31,8 +31,8 @@ optimizer_type = "sgd"  # Use SGD instead of Adam
 subset = 1.0  # Use full dataset
 max_epochs = 300  # EtinyNet duration
 patience = 999999  # Let cosine schedule finish
-# max_grad_norm = 1.0
-max_grad_norm = 0.0  # Try without gradient clipping
+max_grad_norm = 1.0
+# max_grad_norm = 0.0  # Try without gradient clipping
 
 # Learning rate schedule - EtinyNet's secret sauce
 use_cosine_scheduler = True  # Enable cosine annealing
