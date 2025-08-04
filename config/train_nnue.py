@@ -9,7 +9,7 @@ import this file quickly.
 name = "nnue_vision-gpu"
 
 # Dataset and model settings
-batch_size = 1024  # GPU-friendly
+batch_size = 256  # GPU-friendly
 num_workers = 8  # Reasonable parallelism
 num_classes = 10  # CIFAR-10 classes
 
