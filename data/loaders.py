@@ -14,7 +14,7 @@ def create_data_loaders(
     dataset_name: str = "cifar10",
     batch_size: int = 32,
     num_workers: int = 4,
-    target_size: Tuple[int, int] = (96, 96),
+    target_size: Optional[Tuple[int, int]] = None,
     max_samples_per_split: Optional[int] = None,
     subset: float = 1.0,
     data_root: str = "./data/raw",
