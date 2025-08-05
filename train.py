@@ -87,34 +87,30 @@ class CheckpointManager:
         torch.save(checkpoint, checkpoint_path)
         early_log(f"💾 Saved checkpoint: {checkpoint_path}")
 
-        # Upload to wandb if requested
-        if upload_to_wandb and wandb.run is not None:
-            try:
-                if is_best:
-                    artifact_name = f"best_model_epoch_{epoch}"
-                    artifact_type = "best_model"
-                    early_log(f"📤 Uploading BEST checkpoint to wandb...")
-                else:
-                    artifact_name = f"checkpoint_epoch_{epoch}"
-                    artifact_type = "checkpoint"
-                    early_log(f"📤 Uploading checkpoint to wandb...")
+        # Upload to wandb if requested (fail fast on any wandb errors)
+        if upload_to_wandb:
+            if is_best:
+                artifact_name = f"best_model_epoch_{epoch}"
+                artifact_type = "best_model"
+                early_log(f"📤 Uploading BEST checkpoint to wandb...")
+            else:
+                artifact_name = f"checkpoint_epoch_{epoch}"
+                artifact_type = "checkpoint"
+                early_log(f"📤 Uploading checkpoint to wandb...")
 
-                artifact = wandb.Artifact(
-                    name=artifact_name,
-                    type=artifact_type,
-                    metadata={
-                        "epoch": epoch,
-                        "metrics": metrics,
-                        "config_name": getattr(config, "name", "unknown"),
-                        "is_best": is_best,
-                    },
-                )
-                artifact.add_file(str(checkpoint_path))
-                wandb.log_artifact(artifact)
-                early_log(f"✅ Checkpoint uploaded to wandb as {artifact_name}")
-
-            except Exception as e:
-                early_log(f"⚠️  Failed to upload checkpoint to wandb: {e}")
+            artifact = wandb.Artifact(
+                name=artifact_name,
+                type=artifact_type,
+                metadata={
+                    "epoch": epoch,
+                    "metrics": metrics,
+                    "config_name": getattr(config, "name", "unknown"),
+                    "is_best": is_best,
+                },
+            )
+            artifact.add_file(str(checkpoint_path))
+            wandb.log_artifact(artifact)
+            early_log(f"✅ Checkpoint uploaded to wandb as {artifact_name}")
 
         return str(checkpoint_path)
 

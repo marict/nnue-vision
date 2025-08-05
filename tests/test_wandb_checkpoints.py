@@ -1,27 +1,26 @@
 """Tests for wandb checkpoint saving functionality.
 
 This test suite verifies that the CheckpointManager correctly:
-1. Saves checkpoints locally (regardless of wandb status)
+1. Saves checkpoints locally in all scenarios
 2. Uploads checkpoints to wandb when configured to do so
 3. Respects upload frequency settings (best models + periodic)
-4. Handles wandb upload errors gracefully
+4. Fails immediately when wandb upload errors occur (no graceful fallback)
 5. Creates artifacts with correct metadata and naming
 6. Tracks best checkpoints correctly
 7. Works with realistic training workflow patterns
 
 Test Coverage:
-- Basic checkpoint saving without wandb
+- Basic checkpoint saving without wandb upload
 - Best model uploads to wandb
 - Periodic checkpoint uploads to wandb
 - Upload logic validation (when to upload)
-- Error handling for wandb failures
+- Fail-fast behavior for wandb failures
 - Comprehensive training workflow simulation
 - Configuration parameter handling
 
+Note: In production, wandb is always initialized before training starts (training exits if no WANDB_API_KEY).
 These tests use mocks to avoid requiring actual wandb credentials or network access.
 """
-
-import os
 
 # Import the classes we need to test
 import sys
@@ -100,22 +99,19 @@ class TestWandbCheckpointSaving:
         return torch.optim.SGD(mock_model.parameters(), lr=0.01)
 
     def test_checkpoint_manager_basic_save(self, temp_dir, mock_model, mock_optimizer):
-        """Test basic checkpoint saving without wandb."""
+        """Test basic checkpoint saving without wandb upload."""
         manager = CheckpointManager(temp_dir)
         config = MockConfig()
 
-        with patch("train.wandb") as mock_wandb:
-            mock_wandb.run = None  # No wandb run active
-
-            checkpoint_path = manager.save_checkpoint(
-                model=mock_model,
-                optimizer=mock_optimizer,
-                epoch=5,
-                metrics={"val_f1": 0.85, "val_loss": 0.25},
-                config=config,
-                is_best=False,
-                upload_to_wandb=True,  # Should not upload since wandb.run is None
-            )
+        checkpoint_path = manager.save_checkpoint(
+            model=mock_model,
+            optimizer=mock_optimizer,
+            epoch=5,
+            metrics={"val_f1": 0.85, "val_loss": 0.25},
+            config=config,
+            is_best=False,
+            upload_to_wandb=False,  # Explicitly disable wandb upload
+        )
 
         # Check that checkpoint was saved locally
         assert Path(checkpoint_path).exists()
@@ -126,10 +122,6 @@ class TestWandbCheckpointSaving:
         assert checkpoint["epoch"] == 5
         assert checkpoint["metrics"]["val_f1"] == 0.85
         assert checkpoint["config_name"] == "test_config"
-
-        # Verify wandb was not called
-        mock_wandb.Artifact.assert_not_called()
-        mock_wandb.log_artifact.assert_not_called()
 
     def test_best_checkpoint_wandb_upload(self, temp_dir, mock_model, mock_optimizer):
         """Test that best checkpoints are uploaded to wandb with correct metadata."""
@@ -229,10 +221,8 @@ class TestWandbCheckpointSaving:
         # Check that no artifacts were uploaded
         assert len(mock_run.artifacts_logged) == 0
 
-    def test_wandb_upload_error_handling(
-        self, temp_dir, mock_model, mock_optimizer, capsys
-    ):
-        """Test that wandb upload errors are handled gracefully."""
+    def test_wandb_upload_error_fails_fast(self, temp_dir, mock_model, mock_optimizer):
+        """Test that wandb upload errors cause immediate failure (no graceful handling)."""
         manager = CheckpointManager(temp_dir)
         config = MockConfig(always_save_best_to_wandb=True)
 
@@ -240,23 +230,17 @@ class TestWandbCheckpointSaving:
             mock_wandb.run = MagicMock()
             mock_wandb.Artifact.side_effect = Exception("Wandb connection failed")
 
-            # This should not raise an exception
-            checkpoint_path = manager.save_checkpoint(
-                model=mock_model,
-                optimizer=mock_optimizer,
-                epoch=10,
-                metrics={"val_f1": 0.92, "val_loss": 0.15},
-                config=config,
-                is_best=True,
-                upload_to_wandb=True,
-            )
-
-        # Check that checkpoint was still saved locally
-        assert Path(checkpoint_path).exists()
-
-        # Check that error was logged (early_log prints to stdout)
-        captured = capsys.readouterr()
-        assert "Failed to upload checkpoint to wandb" in captured.out
+            # This should raise an exception and fail immediately
+            with pytest.raises(Exception, match="Wandb connection failed"):
+                manager.save_checkpoint(
+                    model=mock_model,
+                    optimizer=mock_optimizer,
+                    epoch=10,
+                    metrics={"val_f1": 0.92, "val_loss": 0.15},
+                    config=config,
+                    is_best=True,
+                    upload_to_wandb=True,
+                )
 
     def test_checkpoint_upload_logic_best_models(self):
         """Test the logic for determining when to upload checkpoints - best models."""
@@ -328,48 +312,48 @@ class TestWandbCheckpointSaving:
         manager = CheckpointManager(temp_dir)
         config = MockConfig()
 
-        with patch("train.wandb") as mock_wandb:
-            mock_wandb.run = None
+        # Save first checkpoint (not best)
+        manager.save_checkpoint(
+            model=mock_model,
+            optimizer=mock_optimizer,
+            epoch=1,
+            metrics={"val_f1": 0.75},
+            config=config,
+            is_best=False,
+            upload_to_wandb=False,  # Disable wandb upload for tracking test
+        )
 
-            # Save first checkpoint (not best)
-            manager.save_checkpoint(
-                model=mock_model,
-                optimizer=mock_optimizer,
-                epoch=1,
-                metrics={"val_f1": 0.75},
-                config=config,
-                is_best=False,
-            )
+        assert manager.best_checkpoint_path is None
+        assert manager.best_metric is None
 
-            assert manager.best_checkpoint_path is None
-            assert manager.best_metric is None
+        # Save best checkpoint
+        best_path = manager.save_checkpoint(
+            model=mock_model,
+            optimizer=mock_optimizer,
+            epoch=5,
+            metrics={"val_f1": 0.85},
+            config=config,
+            is_best=True,
+            upload_to_wandb=False,  # Disable wandb upload for tracking test
+        )
 
-            # Save best checkpoint
-            best_path = manager.save_checkpoint(
-                model=mock_model,
-                optimizer=mock_optimizer,
-                epoch=5,
-                metrics={"val_f1": 0.85},
-                config=config,
-                is_best=True,
-            )
+        assert manager.best_checkpoint_path == Path(best_path)
+        assert manager.best_metric == 0.85
 
-            assert manager.best_checkpoint_path == Path(best_path)
-            assert manager.best_metric == 0.85
+        # Save another non-best checkpoint
+        manager.save_checkpoint(
+            model=mock_model,
+            optimizer=mock_optimizer,
+            epoch=8,
+            metrics={"val_f1": 0.80},
+            config=config,
+            is_best=False,
+            upload_to_wandb=False,  # Disable wandb upload for tracking test
+        )
 
-            # Save another non-best checkpoint
-            manager.save_checkpoint(
-                model=mock_model,
-                optimizer=mock_optimizer,
-                epoch=8,
-                metrics={"val_f1": 0.80},
-                config=config,
-                is_best=False,
-            )
-
-            # Best should still be from epoch 5
-            assert manager.best_checkpoint_path == Path(best_path)
-            assert manager.best_metric == 0.85
+        # Best should still be from epoch 5
+        assert manager.best_checkpoint_path == Path(best_path)
+        assert manager.best_metric == 0.85
 
     def test_full_upload_workflow_simulation(
         self, temp_dir, mock_model, mock_optimizer
