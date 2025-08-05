@@ -24,7 +24,7 @@ l3_size = 32  # Second classifier hidden layer
 input_size = 32  # Model architecture: 32x32 image size
 
 # Training settings - NNUE-optimized (post-quantization constraint removal)
-learning_rate = 0.001  # Very conservative for STE threshold stability (was 0.01)
+learning_rate = 0.01
 weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam
@@ -53,6 +53,10 @@ enable_progress_bar = True
 check_val_every_n_epoch = 1
 save_top_k = 1
 
+# Wandb checkpoint settings
+save_checkpoint_every_n_epochs = 10  # Save checkpoint to wandb every N epochs
+always_save_best_to_wandb = True  # Always upload best checkpoints to wandb
+
 # RunPod settings
 keep_alive = False
 
@@ -70,4 +74,6 @@ print(f"  • Max epochs: {max_epochs} (EtinyNet duration)")
 print(f"  • Batch size: {batch_size} (efficiency)")
 print(f"  • Augmentation: {augmentation_strength} (stable)")
 print(f"  • L2 bottleneck: {l2_size} (8.5x expansion)")
-print("🎯 Goal: Stable NNUE training without NaN losses!")
+print(f"  • Wandb checkpoint frequency: every {save_checkpoint_every_n_epochs} epochs")
+print(f"  • Save best models to wandb: {always_save_best_to_wandb}")
+print("🎯 Goal: Stable NNUE training with automatic wandb checkpoint saving!")

@@ -64,6 +64,7 @@ class CheckpointManager:
         metrics: Dict[str, float],
         config: Any,
         is_best: bool = False,
+        upload_to_wandb: bool = True,
     ) -> str:
         """Save checkpoint with model, optimizer, and metadata."""
         checkpoint = {
@@ -85,6 +86,35 @@ class CheckpointManager:
         checkpoint_path = self.log_dir / filename
         torch.save(checkpoint, checkpoint_path)
         early_log(f"💾 Saved checkpoint: {checkpoint_path}")
+
+        # Upload to wandb if requested
+        if upload_to_wandb and wandb.run is not None:
+            try:
+                if is_best:
+                    artifact_name = f"best_model_epoch_{epoch}"
+                    artifact_type = "best_model"
+                    early_log(f"📤 Uploading BEST checkpoint to wandb...")
+                else:
+                    artifact_name = f"checkpoint_epoch_{epoch}"
+                    artifact_type = "checkpoint"
+                    early_log(f"📤 Uploading checkpoint to wandb...")
+
+                artifact = wandb.Artifact(
+                    name=artifact_name,
+                    type=artifact_type,
+                    metadata={
+                        "epoch": epoch,
+                        "metrics": metrics,
+                        "config_name": getattr(config, "name", "unknown"),
+                        "is_best": is_best,
+                    },
+                )
+                artifact.add_file(str(checkpoint_path))
+                wandb.log_artifact(artifact)
+                early_log(f"✅ Checkpoint uploaded to wandb as {artifact_name}")
+
+            except Exception as e:
+                early_log(f"⚠️  Failed to upload checkpoint to wandb: {e}")
 
         return str(checkpoint_path)
 
@@ -482,6 +512,11 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 best_val_f1 = val_metrics["f1"]
                 early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
 
+            # Determine if we should upload this checkpoint to wandb
+            should_upload_to_wandb = (
+                is_best and getattr(config, "always_save_best_to_wandb", True)
+            ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+
             checkpoint_manager.save_checkpoint(
                 model,
                 optimizer,
@@ -489,6 +524,7 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 {"val_f1": val_metrics["f1"], "val_loss": val_loss},
                 config,
                 is_best=is_best,
+                upload_to_wandb=should_upload_to_wandb,
             )
 
         # Test evaluation
@@ -530,16 +566,8 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
         wandb.log(final_results, commit=True)
 
-        # Save final model as artifact
-        if checkpoint_manager.best_checkpoint_path:
-            artifact = wandb.Artifact("best_f1_model", type="model")
-            artifact.add_file(str(checkpoint_manager.best_checkpoint_path))
-            wandb.log_artifact(artifact)
-            early_log(
-                f"📦 Best model saved as artifact: {checkpoint_manager.best_checkpoint_path}"
-            )
-
         early_log("✅ NNUE training completed successfully!")
+        early_log("📦 Best model checkpoints already saved to wandb during training")
         early_log(f"🎯 Best validation F1: {best_val_f1:.4f}")
         early_log(f"📊 Final test F1: {test_metrics['f1']:.4f}")
 
@@ -830,6 +858,11 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 best_val_f1 = val_metrics["f1"]
                 early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
 
+            # Determine if we should upload this checkpoint to wandb
+            should_upload_to_wandb = (
+                is_best and getattr(config, "always_save_best_to_wandb", True)
+            ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+
             checkpoint_manager.save_checkpoint(
                 model,
                 optimizer,
@@ -837,6 +870,7 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 {"val_f1": val_metrics["f1"], "val_loss": val_loss},
                 config,
                 is_best=is_best,
+                upload_to_wandb=should_upload_to_wandb,
             )
 
         # Test evaluation
@@ -876,16 +910,8 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
 
         wandb.log(final_results, commit=True)
 
-        # Save final model as artifact
-        if checkpoint_manager.best_checkpoint_path:
-            artifact = wandb.Artifact("best_f1_model", type="model")
-            artifact.add_file(str(checkpoint_manager.best_checkpoint_path))
-            wandb.log_artifact(artifact)
-            early_log(
-                f"📦 Best model saved as artifact: {checkpoint_manager.best_checkpoint_path}"
-            )
-
         early_log("✅ EtinyNet training completed successfully!")
+        early_log("📦 Best model checkpoints already saved to wandb during training")
         early_log(f"🎯 Best validation F1: {best_val_f1:.4f}")
         early_log(f"📊 Final test F1: {test_metrics['f1']:.4f}")
 

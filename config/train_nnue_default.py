@@ -41,12 +41,16 @@ devices = "auto"
 deterministic = False
 seed = 42
 
-# Logging and monitoring
+# Logging and monitocan ring
 log_interval = 1
 always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1
 save_top_k = 1
+
+# Wandb checkpoint settings
+save_checkpoint_every_n_epochs = 10  # Save checkpoint to wandb every N epochs
+always_save_best_to_wandb = True  # Always upload best checkpoints to wandb
 
 # RunPod settings
 keep_alive = False
@@ -54,3 +58,15 @@ keep_alive = False
 # Logging backends
 log_dir = "logs"
 project_name = "nnue_default"
+
+# Debug info
+print("🛡️ NNUE Default Training Config Loaded:")
+print(f"  • Optimizer: {optimizer_type.upper()} with momentum={momentum}")
+print(f"  • Learning rate: {learning_rate} (conservative)")
+print(f"  • Gradient clipping: {max_grad_norm}")
+print(f"  • Weight decay: {weight_decay}")
+print(f"  • Max epochs: {max_epochs}")
+print(f"  • Batch size: {batch_size}")
+print(f"  • Wandb checkpoint frequency: every {save_checkpoint_every_n_epochs} epochs")
+print(f"  • Save best models to wandb: {always_save_best_to_wandb}")
+print("🎯 Goal: Stable NNUE training with automatic wandb checkpoint saving!")
