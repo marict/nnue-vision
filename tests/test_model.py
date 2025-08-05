@@ -166,7 +166,6 @@ class TestNNUEBasic:
         loss.backward()
 
         # Verify gradients exist for parameters that should have them (used in forward pass)
-        # Note: nnue2score is a legacy parameter not used in current forward pass
         params_with_grads = []
         params_without_grads = []
         for name, param in model.named_parameters():
@@ -176,10 +175,10 @@ class TestNNUEBasic:
                 else:
                     params_without_grads.append(name)
 
-        # nnue2score is expected to have no gradient since it's not used in forward pass
+        # nnue2score is expected to have no gradient since it's not used in training forward pass
         assert (
             "nnue2score" in params_without_grads
-        ), "nnue2score should not have gradient (not used in forward pass)"
+        ), "nnue2score should not have gradient (not used in training forward pass)"
 
         # All other parameters should have gradients
         critical_params = [

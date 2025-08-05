@@ -300,7 +300,7 @@ class EtinyNet(nn.Module):
         # Build network
         self._build_network()
 
-        # Set final_channels for serialization compatibility
+        # Set final_channels for serialization
         self.final_channels = self.configs["final_channels"]
 
     def count_parameters(self):

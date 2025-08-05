@@ -50,23 +50,25 @@ from training_utils import (
 class CheckpointManager:
     """Simple checkpoint management for training."""
 
-    def __init__(self, log_dir: str):
+    def __init__(self, log_dir: str, run_name: str):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.best_checkpoint_path = None
         self.best_metric = None
+        self.run_name = run_name
 
-    def save_checkpoint(
+    def save_best_model_to_wandb(
         self,
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         epoch: int,
         metrics: Dict[str, float],
         config: Any,
-        is_best: bool = False,
-        upload_to_wandb: bool = True,
-    ) -> str:
-        """Save checkpoint with model, optimizer, and metadata."""
+    ) -> None:
+        """Save only the best model directly to wandb (no local storage)."""
+        # Update best tracking
+        self.best_metric = metrics.get("val_f1", 0)
+
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -75,44 +77,39 @@ class CheckpointManager:
             "config_name": getattr(config, "name", "unknown"),
         }
 
-        # Create filename
-        if is_best:
-            filename = f"best-f1-{epoch:02d}-{metrics.get('val_f1', 0):.3f}.ckpt"
-            self.best_checkpoint_path = self.log_dir / filename
-            self.best_metric = metrics.get("val_f1", 0)
-        else:
-            filename = f"checkpoint-epoch-{epoch:02d}.ckpt"
+        # Create temporary file for wandb upload
+        import tempfile
 
-        checkpoint_path = self.log_dir / filename
-        torch.save(checkpoint, checkpoint_path)
-        early_log(f"💾 Saved checkpoint: {checkpoint_path}")
+        with tempfile.NamedTemporaryFile(
+            suffix=f"-best-f1-{epoch:02d}-{metrics.get('val_f1', 0):.3f}.ckpt",
+            delete=False,
+        ) as tmp_file:
+            torch.save(checkpoint, tmp_file.name)
+            tmp_path = tmp_file.name
 
-        # Upload to wandb if requested (fail fast on any wandb errors)
-        if upload_to_wandb:
-            if is_best:
-                artifact_name = f"best_model_epoch_{epoch}"
-                artifact_type = "best_model"
-                early_log(f"📤 Uploading BEST checkpoint to wandb...")
-            else:
-                artifact_name = f"checkpoint_epoch_{epoch}"
-                artifact_type = "checkpoint"
-                early_log(f"📤 Uploading checkpoint to wandb...")
+        early_log(
+            f"📤 Uploading BEST model to wandb (epoch {epoch}, F1: {metrics.get('val_f1', 0):.3f})..."
+        )
 
-            artifact = wandb.Artifact(
-                name=artifact_name,
-                type=artifact_type,
-                metadata={
-                    "epoch": epoch,
-                    "metrics": metrics,
-                    "config_name": getattr(config, "name", "unknown"),
-                    "is_best": is_best,
-                },
-            )
-            artifact.add_file(str(checkpoint_path))
-            wandb.log_artifact(artifact)
-            early_log(f"✅ Checkpoint uploaded to wandb as {artifact_name}")
+        artifact_name = f"{self.run_name}-best"
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="best_model",
+            metadata={
+                "epoch": epoch,
+                "metrics": metrics,
+                "config_name": getattr(config, "name", "unknown"),
+                "run_name": self.run_name,
+            },
+        )
+        artifact.add_file(tmp_path)
+        wandb.log_artifact(artifact)
+        early_log(f"✅ Best model uploaded to wandb as {artifact_name}")
 
-        return str(checkpoint_path)
+        # Clean up temporary file
+        import os
+
+        os.unlink(tmp_path)
 
     def load_checkpoint(
         self,
@@ -327,9 +324,9 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
         replay_early_logs_to_wandb()
 
         # Setup checkpoint manager
-        checkpoint_manager = CheckpointManager(log_dir)
+        checkpoint_manager = CheckpointManager(log_dir, run_name=wandb.run.name)
 
-        # Training loop
+        # Training loop setup
         max_epochs = getattr(config, "max_epochs", 50)
         log_interval = getattr(config, "log_interval", 50)
         best_val_f1 = 0.0
@@ -509,9 +506,9 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
 
             # Determine if we should upload this checkpoint to wandb
-            should_upload_to_wandb = (
-                is_best and getattr(config, "always_save_best_to_wandb", True)
-            ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+            should_upload_to_wandb = (is_best and config.always_save_best_to_wandb) or (
+                epoch % config.save_checkpoint_every_n_epochs == 0
+            )
 
             checkpoint_manager.save_checkpoint(
                 model,
@@ -712,7 +709,7 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
         replay_early_logs_to_wandb()
 
         # Setup checkpoint manager
-        checkpoint_manager = CheckpointManager(log_dir)
+        checkpoint_manager = CheckpointManager(log_dir, run_name=wandb.run.name)
 
         # Training loop
         max_epochs = getattr(config, "max_epochs", 300)
@@ -855,9 +852,9 @@ def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
 
             # Determine if we should upload this checkpoint to wandb
-            should_upload_to_wandb = (
-                is_best and getattr(config, "always_save_best_to_wandb", True)
-            ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+            should_upload_to_wandb = (is_best and config.always_save_best_to_wandb) or (
+                epoch % config.save_checkpoint_every_n_epochs == 0
+            )
 
             checkpoint_manager.save_checkpoint(
                 model,

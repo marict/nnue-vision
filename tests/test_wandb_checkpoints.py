@@ -100,7 +100,7 @@ class TestWandbCheckpointSaving:
 
     def test_checkpoint_manager_basic_save(self, temp_dir, mock_model, mock_optimizer):
         """Test basic checkpoint saving without wandb upload."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig()
 
         checkpoint_path = manager.save_checkpoint(
@@ -125,7 +125,7 @@ class TestWandbCheckpointSaving:
 
     def test_best_checkpoint_wandb_upload(self, temp_dir, mock_model, mock_optimizer):
         """Test that best checkpoints are uploaded to wandb with correct metadata."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(always_save_best_to_wandb=True)
 
         mock_run = MockWandbRun()
@@ -153,7 +153,7 @@ class TestWandbCheckpointSaving:
         assert len(mock_run.artifacts_logged) == 1
         artifact = mock_run.artifacts_logged[0]
 
-        assert artifact.name == "best_model_epoch_10"
+        assert artifact.name == "test-run-best"
         assert artifact.type == "best_model"
         assert artifact.metadata["epoch"] == 10
         assert artifact.metadata["metrics"]["val_f1"] == 0.92
@@ -165,7 +165,7 @@ class TestWandbCheckpointSaving:
         self, temp_dir, mock_model, mock_optimizer
     ):
         """Test that periodic checkpoints are uploaded to wandb."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(save_checkpoint_every_n_epochs=5)
 
         mock_run = MockWandbRun()
@@ -189,13 +189,13 @@ class TestWandbCheckpointSaving:
         assert len(mock_run.artifacts_logged) == 1
         artifact = mock_run.artifacts_logged[0]
 
-        assert artifact.name == "checkpoint_epoch_15"
+        assert artifact.name == "test-run-epoch-15"
         assert artifact.type == "checkpoint"
         assert artifact.metadata["is_best"] is False
 
     def test_no_wandb_upload_when_disabled(self, temp_dir, mock_model, mock_optimizer):
         """Test that checkpoints are not uploaded when upload_to_wandb=False."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(always_save_best_to_wandb=True)
 
         mock_run = MockWandbRun()
@@ -223,7 +223,7 @@ class TestWandbCheckpointSaving:
 
     def test_wandb_upload_error_fails_fast(self, temp_dir, mock_model, mock_optimizer):
         """Test that wandb upload errors cause immediate failure (no graceful handling)."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(always_save_best_to_wandb=True)
 
         with patch("train.wandb") as mock_wandb:
@@ -252,9 +252,9 @@ class TestWandbCheckpointSaving:
         is_best = True
         epoch = 7  # Not a multiple of 10
 
-        should_upload = (
-            is_best and getattr(config, "always_save_best_to_wandb", True)
-        ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+        should_upload = (is_best and config.always_save_best_to_wandb) or (
+            epoch % config.save_checkpoint_every_n_epochs == 0
+        )
 
         assert should_upload is True  # Should upload because it's best
 
@@ -268,9 +268,9 @@ class TestWandbCheckpointSaving:
         is_best = False
         epoch = 20  # Multiple of 10
 
-        should_upload = (
-            is_best and getattr(config, "always_save_best_to_wandb", True)
-        ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+        should_upload = (is_best and config.always_save_best_to_wandb) or (
+            epoch % config.save_checkpoint_every_n_epochs == 0
+        )
 
         assert should_upload is True  # Should upload because it's periodic
 
@@ -284,9 +284,9 @@ class TestWandbCheckpointSaving:
         is_best = False
         epoch = 7  # Not best, not multiple of 10
 
-        should_upload = (
-            is_best and getattr(config, "always_save_best_to_wandb", True)
-        ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+        should_upload = (is_best and config.always_save_best_to_wandb) or (
+            epoch % config.save_checkpoint_every_n_epochs == 0
+        )
 
         assert should_upload is False  # Should not upload
 
@@ -301,15 +301,15 @@ class TestWandbCheckpointSaving:
         is_best = True
         epoch = 7
 
-        should_upload = (
-            is_best and getattr(config, "always_save_best_to_wandb", True)
-        ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 10) == 0)
+        should_upload = (is_best and config.always_save_best_to_wandb) or (
+            epoch % config.save_checkpoint_every_n_epochs == 0
+        )
 
         assert should_upload is False  # Should not upload even though it's best
 
     def test_checkpoint_manager_tracks_best(self, temp_dir, mock_model, mock_optimizer):
         """Test that CheckpointManager correctly tracks the best checkpoint."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig()
 
         # Save first checkpoint (not best)
@@ -359,7 +359,7 @@ class TestWandbCheckpointSaving:
         self, temp_dir, mock_model, mock_optimizer
     ):
         """Test a full training workflow simulation with realistic upload patterns."""
-        manager = CheckpointManager(temp_dir)
+        manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(
             always_save_best_to_wandb=True, save_checkpoint_every_n_epochs=5
         )
@@ -384,9 +384,9 @@ class TestWandbCheckpointSaving:
                     best_epochs.append(epoch)
 
                 # Determine if should upload
-                should_upload = (
-                    is_best and getattr(config, "always_save_best_to_wandb", True)
-                ) or (epoch % getattr(config, "save_checkpoint_every_n_epochs", 5) == 0)
+                should_upload = (is_best and config.always_save_best_to_wandb) or (
+                    epoch % config.save_checkpoint_every_n_epochs == 0
+                )
 
                 if should_upload:
                     uploaded_epochs.append(epoch)
@@ -423,11 +423,11 @@ class TestWandbCheckpointSaving:
             # Verify artifact names and types
             for artifact in best_artifacts:
                 assert artifact.type == "best_model"
-                assert "best_model_epoch_" in artifact.name
+                assert artifact.name == "test-run-best"
 
             for artifact in periodic_artifacts:
                 assert artifact.type == "checkpoint"
-                assert "checkpoint_epoch_" in artifact.name
+                assert artifact.name.startswith("test-run-epoch-")
 
 
 if __name__ == "__main__":

@@ -53,9 +53,7 @@ enable_progress_bar = True
 check_val_every_n_epoch = 1
 save_top_k = 1
 
-# Wandb checkpoint settings
-save_checkpoint_every_n_epochs = 10  # Save checkpoint to wandb every N epochs
-always_save_best_to_wandb = True  # Always upload best checkpoints to wandb
+# Simplified: only save best models to wandb (no volume storage)
 
 # RunPod settings
 keep_alive = False
@@ -74,6 +72,3 @@ print(f"  • Max epochs: {max_epochs} (EtinyNet duration)")
 print(f"  • Batch size: {batch_size} (efficiency)")
 print(f"  • Augmentation: {augmentation_strength} (stable)")
 print(f"  • L2 bottleneck: {l2_size} (8.5x expansion)")
-print(f"  • Wandb checkpoint frequency: every {save_checkpoint_every_n_epochs} epochs")
-print(f"  • Save best models to wandb: {always_save_best_to_wandb}")
-print("🎯 Goal: Stable NNUE training with automatic wandb checkpoint saving!")
