@@ -23,6 +23,7 @@ Usage Examples:
 import argparse
 import os
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -77,9 +78,6 @@ class CheckpointManager:
             "config_name": getattr(config, "name", "unknown"),
         }
 
-        # Create temporary file for wandb upload
-        import tempfile
-
         with tempfile.NamedTemporaryFile(
             suffix=f"-best-f1-{epoch:02d}-{metrics.get('val_f1', 0):.3f}.ckpt",
             delete=False,
@@ -105,9 +103,6 @@ class CheckpointManager:
         artifact.add_file(tmp_path)
         wandb.log_artifact(artifact)
         early_log(f"✅ Best model uploaded to wandb as {artifact_name}")
-
-        # Clean up temporary file
-        import os
 
         os.unlink(tmp_path)
 
@@ -505,20 +500,14 @@ def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
                 best_val_f1 = val_metrics["f1"]
                 early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
 
-            # Determine if we should upload this checkpoint to wandb
-            should_upload_to_wandb = (is_best and config.always_save_best_to_wandb) or (
-                epoch % config.save_checkpoint_every_n_epochs == 0
-            )
-
-            checkpoint_manager.save_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                {"val_f1": val_metrics["f1"], "val_loss": val_loss},
-                config,
-                is_best=is_best,
-                upload_to_wandb=should_upload_to_wandb,
-            )
+            if is_best:
+                checkpoint_manager.save_best_model_to_wandb(
+                    model,
+                    optimizer,
+                    epoch,
+                    {"val_f1": val_metrics["f1"], "val_loss": val_loss},
+                    config,
+                )
 
         # Test evaluation
         early_log("🧪 Running final test evaluation...")
