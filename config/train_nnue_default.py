@@ -37,6 +37,12 @@ max_grad_norm = 1.0
 # Learning rate schedule - EtinyNet's secret sauce
 use_cosine_scheduler = True  # Enable cosine annealing
 
+# Learning rate schedule parameters
+decay_lr = True
+use_cyclical_lr = False
+cyclical_lr_period = 1000
+cyclical_lr_amplitude = 0.1
+
 use_augmentation = False
 augmentation_strength = "light"
 

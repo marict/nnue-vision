@@ -1218,8 +1218,6 @@ class TestNNUESparsityPerformance:
         ]
 
         batch_size = 4
-        # layer_stack_indices is no longer used by NNUE.forward
-        # layer_stack_indices = torch.zeros(batch_size, dtype=torch.long, device=device)
 
         print(f"\n🚀 OPTIMIZATION RESULTS:")
         print(

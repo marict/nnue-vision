@@ -30,6 +30,12 @@ max_epochs = 800
 patience = 99999  # Never stop
 save_top_k = 1  # Save only best model
 
+# Learning rate schedule parameters
+decay_lr = True
+use_cyclical_lr = False
+cyclical_lr_period = 1000
+cyclical_lr_amplitude = 0.1
+
 # System settings
 accelerator = "auto"  # Auto-detect GPU/CPU
 devices = "auto"

@@ -309,7 +309,7 @@ def get_lr(it: int, *, cfg: BaseConfig) -> float:
         base_lr = cfg.min_lr
     else:
         # In between, might be constant or cosine decay
-        if not getattr(cfg, "decay_lr", True):
+        if not cfg.decay_lr:
             base_lr = cfg.learning_rate
         else:
             # Cosine decay
@@ -321,9 +321,9 @@ def get_lr(it: int, *, cfg: BaseConfig) -> float:
 
     # 2. Apply cyclical modulation if enabled and not in warmup
     final_lr = base_lr
-    if getattr(cfg, "use_cyclical_lr", False) and it >= cfg.warmup_iters:
-        period = getattr(cfg, "cyclical_lr_period", 1000)
-        amplitude = getattr(cfg, "cyclical_lr_amplitude", 0.1)
+    if cfg.use_cyclical_lr and it >= cfg.warmup_iters:
+        period = cfg.cyclical_lr_period
+        amplitude = cfg.cyclical_lr_amplitude
 
         # Cycle starts after warmup
         progress_in_decay = it - cfg.warmup_iters

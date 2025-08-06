@@ -276,7 +276,7 @@ def get_etinynet_quantized_data(model: EtinyNet):
         "conv_channels": model.configs["conv_channels"],
         "final_channels": model.final_channels,
         "use_asq": model.use_asq,
-        "asq_bits": getattr(model, "asq", {}).get("bits", 4) if model.use_asq else 4,
+        "asq_bits": model.asq.bits if model.use_asq else 4,
         "lambda_param": model.asq.lambda_param.item() if model.use_asq else 2.0,
     }
 

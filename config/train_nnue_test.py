@@ -32,6 +32,12 @@ augmentation_strength = "light"
 keep_alive = False
 
 
+# Learning rate schedule parameters
+decay_lr = True
+use_cyclical_lr = False
+cyclical_lr_period = 1000
+cyclical_lr_amplitude = 0.1
+
 # Loss parameters
 start_lambda = 1.0
 end_lambda = 1.0

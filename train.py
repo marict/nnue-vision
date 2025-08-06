@@ -78,7 +78,7 @@ class CheckpointManager:
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "metrics": metrics,
-            "config_name": getattr(config, "name", "unknown"),
+            "config_name": config.name,
         }
 
         with tempfile.NamedTemporaryFile(
@@ -101,7 +101,7 @@ class CheckpointManager:
             metadata={
                 "epoch": epoch,
                 "metrics": metrics,
-                "config_name": getattr(config, "name", "unknown"),
+                "config_name": config.name,
                 "run_name": self.run_name,
             },
         )
@@ -676,9 +676,7 @@ def main():
     config = load_and_setup_config(args, args.model_type)
 
     # Run training based on model type
-    return train_model(
-        config, args.model_type, wandb_run_id=getattr(args, "wandb_run_id", None)
-    )
+    return train_model(config, args.model_type, wandb_run_id=args.wandb_run_id)
 
 
 if __name__ == "__main__":

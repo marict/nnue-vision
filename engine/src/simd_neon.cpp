@@ -19,7 +19,7 @@ void conv2d_unrolled_neon(const float* input, const int8_t* weights,
 // NEON feature transformer implementation
 void ft_forward_neon(const std::vector<int>& features, const int16_t* weights,
                      const int32_t* biases, int16_t* output, int num_features,
-                     int output_size, float /* scale */) {
+                     int output_size, float scale) {
     // Initialize with biases
     for (int i = 0; i < output_size; ++i) {
         output[i] = static_cast<int16_t>(biases[i]);
@@ -161,13 +161,15 @@ namespace nnue {
 namespace simd {
 
 void conv2d_unrolled_neon(const float* input, const int8_t* weights,
-                          const int32_t* biases, int8_t* output, float scale) {
-    conv2d_unrolled_scalar(input, weights, biases, output, scale);
+                          const int32_t* biases, int8_t* output, float scale,
+                          int input_h, int input_w, int out_channels, int stride) {
+    conv2d_unrolled_scalar(input, weights, biases, output, scale, input_h, input_w, out_channels, stride);
 }
 
 void ft_forward_neon(const std::vector<int>& features, const int16_t* weights,
-                     const int32_t* biases, int16_t* output, float scale) {
-    ft_forward_scalar(features, weights, biases, output, scale);
+                     const int32_t* biases, int16_t* output, int num_features,
+                     int output_size, float scale) {
+    ft_forward_scalar(features, weights, biases, output, num_features, output_size, scale);
 }
 
 void dense_forward_neon(const int16_t* input, const int8_t* weights,

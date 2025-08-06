@@ -37,6 +37,12 @@ always_save_checkpoint = True  # Keep checkpointing enabled to avoid conflicts
 enable_progress_bar = True  # Keep progress bar enabled to avoid conflicts
 check_val_every_n_epoch = 1
 
+# Learning rate schedule parameters
+decay_lr = True
+use_cyclical_lr = False
+cyclical_lr_period = 1000
+cyclical_lr_amplitude = 0.1
+
 # RunPod settings
 keep_alive = False  # Terminate RunPod instance after training completes
 

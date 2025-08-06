@@ -19,7 +19,7 @@ void conv2d_unrolled_avx2(const float* input, const int8_t* weights,
 // AVX2 feature transformer implementation
 void ft_forward_avx2(const std::vector<int>& features, const int16_t* weights,
                      const int32_t* biases, int16_t* output, int num_features,
-                     int output_size, float scale) {
+                     int output_size, float /* scale */) {
     // Initialize with biases
     for (int i = 0; i < output_size; ++i) {
         output[i] = static_cast<int16_t>(biases[i]);

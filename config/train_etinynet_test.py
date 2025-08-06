@@ -28,5 +28,11 @@ use_augmentation = False  # Disable augmentation for speed
 num_classes = 10
 input_size = 32
 
+# Learning rate schedule parameters
+decay_lr = True
+use_cyclical_lr = False
+cyclical_lr_period = 1000
+cyclical_lr_amplitude = 0.1
+
 # Logging
 keep_alive = False

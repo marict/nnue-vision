@@ -44,7 +44,7 @@ def _extract_project_name_from_config(
     """Extract project name from config file."""
     try:
         config = load_config(config_path)
-        return getattr(config, "project_name", f"{model_type}_training")
+        return config.project_name
     except Exception:
         print(f"Warning: failed to load config from {config_path}")
         raise
