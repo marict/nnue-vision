@@ -220,9 +220,9 @@ struct DynamicGrid {
     
     DynamicGrid(int grid_size, int num_channels) 
         : grid_size(grid_size), num_channels(num_channels) {
-        pixels.resize(grid_size);
+        pixels.resize(static_cast<size_t>(grid_size));
         for (auto& row : pixels) {
-            row.resize(grid_size, 0);
+            row.resize(static_cast<size_t>(grid_size), 0);
         }
     }
     
@@ -245,7 +245,7 @@ struct DynamicGrid {
                         pixel_features |= (1ULL << c);
                     }
                 }
-                pixels[h][w] = pixel_features;
+                pixels[static_cast<size_t>(h)][static_cast<size_t>(w)] = pixel_features;
             }
         }
     }
@@ -255,7 +255,7 @@ struct DynamicGrid {
         active_features.clear();
         for (int h = 0; h < grid_size; ++h) {
             for (int w = 0; w < grid_size; ++w) {
-                uint64_t pixel = pixels[h][w];
+                uint64_t pixel = pixels[static_cast<size_t>(h)][static_cast<size_t>(w)];
                 if (pixel != 0 && num_channels <= 64) {
                     // Extract active bits efficiently for small channel counts
                     while (pixel) {
@@ -285,7 +285,7 @@ struct DynamicGrid {
         for (int h = 0; h < grid_size; ++h) {
             for (int w = 0; w < grid_size; ++w) {
                 if (num_channels <= 64) {
-                    total += __builtin_popcountll(pixels[h][w]);
+                    total += __builtin_popcountll(pixels[static_cast<size_t>(h)][static_cast<size_t>(w)]);
                 }
             }
         }

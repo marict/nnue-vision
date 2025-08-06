@@ -53,61 +53,49 @@ bool ConvLayer::load_from_stream(std::ifstream& file) {
 }
 
 void ConvLayer::forward(const float* input, int8_t* output, int input_h, int input_w, int stride) const {
-    // Calculate output dimensions
-    int output_h = (input_h + 2 - kernel_h) / stride + 1;  // With padding=1
+    int output_h = (input_h + 2 - kernel_h) / stride + 1;
     int output_w = (input_w + 2 - kernel_w) / stride + 1;
     
-    // Optimized convolution: separate border from interior processing
-    
-    // Process interior pixels (no padding checks needed)
     const int interior_start_h = 1;
     const int interior_end_h = output_h - 1;
     const int interior_start_w = 1; 
     const int interior_end_w = output_w - 1;
     
-    // Interior processing (hot path) - unrolled for 3x3 kernel
     for (int out_c = 0; out_c < out_channels; ++out_c) {
-        // Prefetch bias for this output channel
         int32_t bias = biases[out_c];
         
         for (int out_h = interior_start_h; out_h < interior_end_h; ++out_h) {
             for (int out_w = interior_start_w; out_w < interior_end_w; ++out_w) {
                 int32_t acc = bias;
                 
-                // Unrolled 3x3 convolution (no bounds checking needed)
                 const int base_in_h = out_h * stride - 1;
                 const int base_in_w = out_w * stride - 1;
                 
-                // Manually unroll 3x3 kernel for better performance
                 for (int in_c = 0; in_c < in_channels; ++in_c) {
-                    // Row 0 (kh=0)
                     acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 0) * 3 + 0) * in_channels + in_c];  // [0,0]
+                         * weights[((out_c * 3 + 0) * 3 + 0) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w + 1) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 0) * 3 + 1) * in_channels + in_c];  // [0,1]
+                         * weights[((out_c * 3 + 0) * 3 + 1) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(base_in_h * input_w + base_in_w + 2) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 0) * 3 + 2) * in_channels + in_c];  // [0,2]
+                         * weights[((out_c * 3 + 0) * 3 + 2) * in_channels + in_c];
                     
-                    // Row 1 (kh=1)
                     const int row1_base = (base_in_h + 1) * input_w + base_in_w;
                     acc += static_cast<int32_t>(input[row1_base * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 1) * 3 + 0) * in_channels + in_c];  // [1,0]
+                         * weights[((out_c * 3 + 1) * 3 + 0) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(row1_base + 1) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 1) * 3 + 1) * in_channels + in_c];  // [1,1]
+                         * weights[((out_c * 3 + 1) * 3 + 1) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(row1_base + 2) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 1) * 3 + 2) * in_channels + in_c];  // [1,2]
+                         * weights[((out_c * 3 + 1) * 3 + 2) * in_channels + in_c];
                     
-                    // Row 2 (kh=2)
                     const int row2_base = (base_in_h + 2) * input_w + base_in_w;
                     acc += static_cast<int32_t>(input[row2_base * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 2) * 3 + 0) * in_channels + in_c];  // [2,0]
+                         * weights[((out_c * 3 + 2) * 3 + 0) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(row2_base + 1) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 2) * 3 + 1) * in_channels + in_c];  // [2,1]
+                         * weights[((out_c * 3 + 2) * 3 + 1) * in_channels + in_c];
                     acc += static_cast<int32_t>(input[(row2_base + 2) * in_channels + in_c] * scale) 
-                         * weights[((out_c * 3 + 2) * 3 + 2) * in_channels + in_c];  // [2,2]
+                         * weights[((out_c * 3 + 2) * 3 + 2) * in_channels + in_c];
                 }
                 
-                // Apply activation and quantize
                 int8_t result = static_cast<int8_t>(std::max(-127, std::min(127, acc / static_cast<int32_t>(scale))));
                 int output_idx = (out_h * output_w + out_w) * out_channels + out_c;
                 output[output_idx] = result;
@@ -115,19 +103,16 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
         }
     }
     
-    // Process border pixels (top/bottom rows, left/right columns) with bounds checking
     for (int out_c = 0; out_c < out_channels; ++out_c) {
-        // Top and bottom rows
         for (int out_h = 0; out_h < output_h; ++out_h) {
-            if (out_h >= interior_start_h && out_h < interior_end_h) continue;  // Skip interior
+            if (out_h >= interior_start_h && out_h < interior_end_h) continue;
             
             for (int out_w = 0; out_w < output_w; ++out_w) {
                 int32_t acc = biases[out_c];
                 
-                // Original code with bounds checking for border pixels
                 for (int kh = 0; kh < kernel_h; ++kh) {
                     for (int kw = 0; kw < kernel_w; ++kw) {
-                        int in_h = out_h * stride + kh - 1;  // padding=1
+                        int in_h = out_h * stride + kh - 1;
                         int in_w = out_w * stride + kw - 1;
                         
                         if (in_h >= 0 && in_h < input_h && in_w >= 0 && in_w < input_w) {
@@ -147,9 +132,8 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
             }
         }
         
-        // Left and right columns (excluding corners already processed)
         for (int out_w = 0; out_w < output_w; ++out_w) {
-            if (out_w >= interior_start_w && out_w < interior_end_w) continue;  // Skip interior
+            if (out_w >= interior_start_w && out_w < interior_end_w) continue;
             
             for (int out_h = interior_start_h; out_h < interior_end_h; ++out_h) {
                 int32_t acc = biases[out_c];
@@ -278,7 +262,6 @@ void FeatureTransformer::remove_feature(int feature_idx, int16_t* accumulator) c
 }
 
 void FeatureTransformer::move_feature(int from_idx, int to_idx, int16_t* accumulator) const {
-    // Efficient move: remove old, add new
     remove_feature(from_idx, accumulator);
     add_feature(to_idx, accumulator);
 }
@@ -286,47 +269,41 @@ void FeatureTransformer::move_feature(int from_idx, int to_idx, int16_t* accumul
 void FeatureTransformer::update_accumulator(const std::vector<int>& added_features,
                                            const std::vector<int>& removed_features,
                                            int16_t* accumulator) const {
-    // Remove features first (order matters for numerical stability)
     for (int feature_idx : removed_features) {
         remove_feature(feature_idx, accumulator);
     }
     
-    // Add new features
     for (int feature_idx : added_features) {
         add_feature(feature_idx, accumulator);
     }
 }
 
-// SIMD-optimized batch operations
 void FeatureTransformer::add_feature_simd(int feature_idx, int16_t* accumulator) const {
-    add_feature(feature_idx, accumulator);  // Delegates to optimized version above
+    add_feature(feature_idx, accumulator);
 }
 
 void FeatureTransformer::remove_feature_simd(int feature_idx, int16_t* accumulator) const {
-    remove_feature(feature_idx, accumulator);  // Delegates to optimized version above
+    remove_feature(feature_idx, accumulator);
 }
 
 void FeatureTransformer::forward_simd(const std::vector<int>& active_features, int16_t* output) const {
-    forward(active_features, output);  // Delegates to optimized version above
+    forward(active_features, output);
 }
 
-// LayerStack implementation
 LayerStack::LayerStack() : l1_size(0), l2_size(0), l3_size(0), l1_scale(64.0f), l1_fact_scale(64.0f), l2_scale(64.0f), output_scale(16.0f) {}
 
 bool LayerStack::load_from_stream(std::ifstream& file) {
-    // Read scales (including factorization scale)
     file.read(reinterpret_cast<char*>(&l1_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&l2_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&output_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&l1_fact_scale), sizeof(float));
     
-    // Read L1 layer
     uint32_t l1_out_size, l1_in_size;
     file.read(reinterpret_cast<char*>(&l1_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l1_in_size), sizeof(uint32_t));
     
     l1_size = l1_in_size;
-    l2_size = l1_out_size - 1;  // L1 output is now l2_size + 1
+    l2_size = l1_out_size - 1;
     
     l1_weights.resize(l1_out_size * l1_in_size);
     file.read(reinterpret_cast<char*>(l1_weights.data()), l1_weights.size());
@@ -336,7 +313,6 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     l1_biases.resize(l1_bias_count);
     file.read(reinterpret_cast<char*>(l1_biases.data()), l1_bias_count * sizeof(int32_t));
     
-    // Read L1 factorization layer
     uint32_t l1_fact_out_size, l1_fact_in_size;
     file.read(reinterpret_cast<char*>(&l1_fact_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l1_fact_in_size), sizeof(uint32_t));
@@ -354,7 +330,6 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     l1_fact_biases.resize(l1_fact_bias_count);
     file.read(reinterpret_cast<char*>(l1_fact_biases.data()), l1_fact_bias_count * sizeof(int32_t));
     
-    // Read L2 layer
     uint32_t l2_out_size, l2_in_size;
     file.read(reinterpret_cast<char*>(&l2_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l2_in_size), sizeof(uint32_t));
@@ -420,63 +395,47 @@ float LayerStack::forward(const int16_t* input, int layer_stack_index) const {
                                      l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
         }
     
-    // Extract l1c_out from the last component of combined output
     float l1c_out = static_cast<float>(l1_combined_output[l2_size]) / l1_scale;
     
-    // L1 factorization: l1_size -> (l2_size + 1) to get factorization outputs
     std::vector<int8_t> l1_fact_output(l1_fact_biases.size());
     simd::dense_forward_scalar(input, l1_fact_weights.data(), l1_fact_biases.data(),
                              l1_fact_output.data(), l1_size, l1_fact_biases.size(), l1_fact_scale);
     
-    // Extract l1f_out from the last component of factorization output
     float l1f_out = static_cast<float>(l1_fact_output[l2_size]) / l1_fact_scale;
     
-    // Apply squared concatenation: [squared(l1), original(l1)] to match Python model
-    // FIXED: Use int16_t buffer to match dense_forward_scalar signature
     std::vector<int16_t> l1_expanded(l2_size * 2);
     
-    // Unroll squared concatenation by 4 for better performance
     int i = 0;
     for (; i <= l2_size - 4; i += 4) {
-        // Process 4 elements at once to improve instruction-level parallelism
-        
-        // Element 0
         int32_t squared0 = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
         squared0 = (squared0 * 127) / 128;
         l1_expanded[i] = static_cast<int16_t>(std::max(0, std::min(127, squared0)));
         l1_expanded[i + l2_size] = static_cast<int16_t>(l1_combined_output[i]);
         
-        // Element 1
         int32_t squared1 = static_cast<int32_t>(l1_combined_output[i+1]) * static_cast<int32_t>(l1_combined_output[i+1]);
         squared1 = (squared1 * 127) / 128;
         l1_expanded[i+1] = static_cast<int16_t>(std::max(0, std::min(127, squared1)));
         l1_expanded[i+1 + l2_size] = static_cast<int16_t>(l1_combined_output[i+1]);
         
-        // Element 2
         int32_t squared2 = static_cast<int32_t>(l1_combined_output[i+2]) * static_cast<int32_t>(l1_combined_output[i+2]);
         squared2 = (squared2 * 127) / 128;
         l1_expanded[i+2] = static_cast<int16_t>(std::max(0, std::min(127, squared2)));
         l1_expanded[i+2 + l2_size] = static_cast<int16_t>(l1_combined_output[i+2]);
         
-        // Element 3
         int32_t squared3 = static_cast<int32_t>(l1_combined_output[i+3]) * static_cast<int32_t>(l1_combined_output[i+3]);
         squared3 = (squared3 * 127) / 128;
         l1_expanded[i+3] = static_cast<int16_t>(std::max(0, std::min(127, squared3)));
         l1_expanded[i+3 + l2_size] = static_cast<int16_t>(l1_combined_output[i+3]);
     }
     
-    // Handle remaining elements (less than 4)
     for (; i < l2_size; ++i) {
         int32_t squared = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
-        squared = (squared * 127) / 128;  // Apply (127/128) factor
+        squared = (squared * 127) / 128;
         l1_expanded[i] = static_cast<int16_t>(std::max(0, std::min(127, squared)));
         l1_expanded[i + l2_size] = static_cast<int16_t>(l1_combined_output[i]);
     }
     
-    // L2: (l2_size * 2) -> l3_size with ClippedReLU
     std::vector<int8_t> l2_output(l3_size);
-    
-    // FIXED: Use dense_forward with proper SIMD support for int16_t input
     #ifdef __AVX2__
         if (simd::has_avx2()) {
             simd::dense_forward_avx2(l1_expanded.data(), l2_weights.data(), l2_biases.data(),
@@ -494,20 +453,16 @@ float LayerStack::forward(const int16_t* input, int layer_stack_index) const {
                                      l2_output.data(), l2_size * 2, l3_size, l2_scale);
         }
     
-    // Output: l3_size -> 1 (no activation)
     int32_t output_acc = output_biases[0];
-    for (int i = 0; i < l3_size; ++i) {
-        output_acc += static_cast<int32_t>(l2_output[i]) * static_cast<int32_t>(output_weights[i]);
+    for (int j = 0; j < l3_size; ++j) {
+        output_acc += static_cast<int32_t>(l2_output[j]) * static_cast<int32_t>(output_weights[j]);
     }
     
-    // Apply output scaling and convert to float
     float l3c = static_cast<float>(output_acc) / output_scale;
     
-    // Add factorization outputs: l3x_ = l3c_ + l1f_out + l1c_out
     return l3c + l1f_out + l1c_out;
 }
 
-// NNUEEvaluator implementation
 NNUEEvaluator::NNUEEvaluator() : num_features_(0), l1_size_(0), l2_size_(0), l3_size_(0), 
                                 num_ls_buckets_(0), grid_size_(0), num_channels_per_square_(0),
                                 visual_threshold_(0.0f), nnue2score_(600.0f), quantized_one_(127.0f),

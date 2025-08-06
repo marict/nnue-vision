@@ -8,6 +8,16 @@
 
 using namespace nnue;
 
+// Define constants for this example (using the defaults from the header)
+constexpr int INPUT_IMAGE_SIZE = DEFAULT_INPUT_IMAGE_SIZE;
+constexpr int INPUT_CHANNELS = DEFAULT_INPUT_CHANNELS;
+constexpr int OUTPUT_CHANNELS = DEFAULT_OUTPUT_CHANNELS;
+constexpr int CONV_KERNEL_SIZE = DEFAULT_CONV_KERNEL_SIZE;
+constexpr int GRID_FEATURES = DEFAULT_OUTPUT_GRID_SIZE * DEFAULT_OUTPUT_GRID_SIZE * DEFAULT_OUTPUT_CHANNELS;
+constexpr int L1_SIZE = DEFAULT_L1_SIZE;
+constexpr int L2_SIZE = DEFAULT_L2_SIZE;
+constexpr int L3_SIZE = DEFAULT_L3_SIZE;
+
 // Helper function to load an image from RGB data
 std::vector<float> load_test_image() {
     // Create a test image with some pattern
@@ -168,7 +178,7 @@ int main(int argc, char* argv[]) {
         
         auto test_image = load_test_image();
         AlignedVector<int8_t> conv_output(GRID_FEATURES);
-        conv.forward(test_image.data(), conv_output.data());
+        conv.forward(test_image.data(), conv_output.data(), INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE, 1);
         std::cout << "ConvLayer test completed." << std::endl;
         
         return 0;
