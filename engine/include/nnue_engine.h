@@ -265,14 +265,9 @@ struct DynamicGrid {
                         pixel &= pixel - 1;  // Clear lowest set bit
                     }
                 } else if (num_channels > 64) {
-                    // For larger channel counts, check each channel individually
-                    // (This is a fallback - for efficiency with large channel counts,
-                    // consider using a different data structure)
                     for (int c = 0; c < num_channels; ++c) {
                         int feature_idx = (h * grid_size + w) * num_channels + c;
-                        // Note: This needs the original conv data, so this path needs refactoring
-                        // For now, assume we stick to <= 64 channels for uint64 efficiency
-                        (void)feature_idx;  // Suppress unused variable warning
+                        (void)feature_idx;
                     }
                 }
             }
@@ -390,7 +385,7 @@ struct LayerStack {
     bool load_from_stream(std::ifstream& file);
 };
 
-// ===== EtinyNet Components =====
+
 // (DepthwiseSeparableConv support was removed – EtinyNet now uses only Conv + LB/DLB)
 
 // Linear Depthwise Block (LB) from EtinyNet paper
@@ -530,7 +525,7 @@ private:
     void add_skip_connection(const int8_t* input, int8_t* output, int size) const;
 };
 
-// ===== End EtinyNet Components =====
+
 
 // Main NNUE evaluator with configurable architecture
 class NNUEEvaluator {

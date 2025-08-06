@@ -392,10 +392,11 @@ void benchmark_optimizations() {
         std::cout << "Optimized convolution: " << conv_time << " μs for " << num_iterations << " iterations" << std::endl;
         std::cout << "Per iteration: " << static_cast<double>(conv_time) / num_iterations << " μs" << std::endl;
         
-        // Verify output is reasonable
+        // Verify output is reasonable (int8_t range is -128 to 127)
         bool output_reasonable = true;
         for (size_t i = 0; i < output_data.size(); ++i) {
-            if (output_data[i] < -127 || output_data[i] > 127) {
+            // int8_t can never be > 127, so just check for reasonable range
+            if (output_data[i] < -100 || output_data[i] > 100) {
                 output_reasonable = false;
                 break;
             }

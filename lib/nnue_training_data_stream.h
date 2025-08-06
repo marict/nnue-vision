@@ -245,7 +245,6 @@ namespace training_data {
 
     inline std::unique_ptr<BasicSfenInputStream> open_sfen_input_file_parallel(int concurrency, const std::vector<std::string>& filenames, bool cyclic, std::function<bool(const TrainingDataEntry&)> skipPredicate = nullptr)
     {
-        // TODO (low priority): optimize and parallelize .bin reading.
         if (has_extension(filenames[0], BinSfenInputStream::extension))
             return std::make_unique<BinSfenInputStream>(filenames[0], cyclic, std::move(skipPredicate));
         else if (has_extension(filenames[0], BinpackSfenInputParallelStream::extension))

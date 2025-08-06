@@ -130,25 +130,20 @@ void test_linear_depthwise_block(TestResults& results) {
     block.stride = 1;
     
     // Initialize weights and biases
-    int dconv1_size = block.in_channels * 9;  // 3x3 kernel
-    int pconv_size = block.mid_channels * block.in_channels;
-    int dconv2_size = block.mid_channels * 9;  // 3x3 kernel
-    int pconv_out_size = block.out_channels * block.mid_channels;
+    int pw_expand_size = block.mid_channels * block.in_channels;
+    int dw_conv_size = block.mid_channels * 9;  // 3x3 kernel
+    int pw_project_size = block.out_channels * block.mid_channels;
     
-    block.dconv1_weights.resize(dconv1_size);
-    block.pconv_weights.resize(pconv_size);
-    block.pconv_biases.resize(block.mid_channels);
-    block.dconv2_weights.resize(dconv2_size);
-    block.pconv_out_weights.resize(pconv_out_size);
-    block.pconv_out_biases.resize(block.out_channels);
+    block.pw_expand_weights.resize(pw_expand_size);
+    block.pw_expand_biases.resize(block.mid_channels);
+    block.dw_conv_weights.resize(dw_conv_size);
+    block.pw_project_weights.resize(pw_project_size);
     
     // Fill with test data (simplified)
-    for (size_t i = 0; i < block.dconv1_weights.size(); ++i) block.dconv1_weights[i] = 1;
-    for (size_t i = 0; i < block.pconv_weights.size(); ++i) block.pconv_weights[i] = 1;
-    for (size_t i = 0; i < block.pconv_biases.size(); ++i) block.pconv_biases[i] = 0;
-    for (size_t i = 0; i < block.dconv2_weights.size(); ++i) block.dconv2_weights[i] = 1;
-    for (size_t i = 0; i < block.pconv_out_weights.size(); ++i) block.pconv_out_weights[i] = 1;
-    for (size_t i = 0; i < block.pconv_out_biases.size(); ++i) block.pconv_out_biases[i] = 0;
+    for (size_t i = 0; i < block.pw_expand_weights.size(); ++i) block.pw_expand_weights[i] = 1;
+    for (size_t i = 0; i < block.pw_expand_biases.size(); ++i) block.pw_expand_biases[i] = 0;
+    for (size_t i = 0; i < block.dw_conv_weights.size(); ++i) block.dw_conv_weights[i] = 1;
+    for (size_t i = 0; i < block.pw_project_weights.size(); ++i) block.pw_project_weights[i] = 1;
     
     // Test forward pass
     int input_h = 14, input_w = 14;
@@ -182,26 +177,22 @@ void test_dense_linear_depthwise_block(TestResults& results) {
     dlb.linear_block.stride = 1;
     
     // Initialize weights (simplified)
-    dlb.linear_block.dconv1_weights.resize(64 * 9);
-    dlb.linear_block.pconv_weights.resize(64 * 64);
-    dlb.linear_block.pconv_biases.resize(64);
-    dlb.linear_block.dconv2_weights.resize(64 * 9);
-    dlb.linear_block.pconv_out_weights.resize(64 * 64);
-    dlb.linear_block.pconv_out_biases.resize(64);
+    dlb.linear_block.pw_expand_weights.resize(64 * 64);
+    dlb.linear_block.pw_expand_biases.resize(64);
+    dlb.linear_block.dw_conv_weights.resize(64 * 9);
+    dlb.linear_block.pw_project_weights.resize(64 * 64);
     
     // Fill with small values to avoid overflow in skip connection
-    for (size_t i = 0; i < dlb.linear_block.dconv1_weights.size(); ++i) 
-        dlb.linear_block.dconv1_weights[i] = (i % 2) ? 1 : 0;
-    for (size_t i = 0; i < dlb.linear_block.pconv_weights.size(); ++i) 
-        dlb.linear_block.pconv_weights[i] = 0;  // Zero to avoid amplification
-    for (size_t i = 0; i < dlb.linear_block.pconv_biases.size(); ++i) 
-        dlb.linear_block.pconv_biases[i] = 0;
-    for (size_t i = 0; i < dlb.linear_block.dconv2_weights.size(); ++i) 
-        dlb.linear_block.dconv2_weights[i] = 0;
-    for (size_t i = 0; i < dlb.linear_block.pconv_out_weights.size(); ++i) 
-        dlb.linear_block.pconv_out_weights[i] = 0;
-    for (size_t i = 0; i < dlb.linear_block.pconv_out_biases.size(); ++i) 
-        dlb.linear_block.pconv_out_biases[i] = 0;
+    for (size_t i = 0; i < dlb.linear_block.dw_conv_weights.size(); ++i) 
+        dlb.linear_block.dw_conv_weights[i] = (i % 2) ? 1 : 0;
+    for (size_t i = 0; i < dlb.linear_block.pw_expand_weights.size(); ++i) 
+        dlb.linear_block.pw_expand_weights[i] = 0;
+    for (size_t i = 0; i < dlb.linear_block.pw_expand_biases.size(); ++i) 
+        dlb.linear_block.pw_expand_biases[i] = 0;
+    for (size_t i = 0; i < dlb.linear_block.dw_conv_weights.size(); ++i) 
+        dlb.linear_block.dw_conv_weights[i] = 0;
+    for (size_t i = 0; i < dlb.linear_block.pw_project_weights.size(); ++i) 
+        dlb.linear_block.pw_project_weights[i] = 0;
     
     // Test forward pass with skip connection
     int input_h = 7, input_w = 7;
@@ -293,7 +284,8 @@ void test_etinynet_evaluator(TestResults& results) {
     
     bool quantization_reasonable = true;
     for (int i = 0; i < std::min(10, input_size); ++i) {
-        if (quantized_input[i] < -127 || quantized_input[i] > 127) {
+        // int8_t range is -128 to 127, so just check for reasonable range
+        if (quantized_input[i] < -100 || quantized_input[i] > 100) {
             quantization_reasonable = false;
             break;
         }

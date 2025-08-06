@@ -50,6 +50,37 @@ def _extract_project_name_from_config(
         raise
 
 
+def _check_git_status() -> None:
+    """Check for uncommitted git changes and fail if any are found."""
+    # Check if we're in a git repository
+    subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+
+    try:
+        # Get git status
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+
+        if result.stdout.strip():
+            print("❌ Uncommitted changes detected!")
+            raise RunPodError("Uncommitted changes detected!")
+
+    except subprocess.CalledProcessError:
+        raise RunPodError("Failed to check git status")
+    except subprocess.TimeoutExpired:
+        raise RunPodError("Git status check timed out")
+
+
 def _open_browser(url: str) -> None:
     """Try to open URL in browser."""
     chrome_commands = [
@@ -98,6 +129,9 @@ def start_cloud_training(
     script_name: str = "train.py",
 ) -> str:
     """Launch RunPod GPU instance for NNUE-Vision training."""
+
+    # Check for uncommitted changes before starting training
+    _check_git_status()
 
     # Validate note
     if note and re.findall(r"[^A-Za-z0-9_-]", note):

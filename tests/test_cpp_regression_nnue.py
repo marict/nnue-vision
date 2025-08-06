@@ -103,16 +103,90 @@ class TestCppPyTorchRegression:
         torch.testing.assert_close(output1, output2, rtol=1e-6, atol=1e-6)
 
     def test_cpp_engine_available(self):
-        """Test that C++ engine executable is available."""
+        """Test that C++ engine executable is available and build it if needed."""
         engine_path = Path("engine/build/test_nnue_engine")
+        regression_path = Path("engine/build/regression_test")
+
+        # Check if both executables exist
+        if not engine_path.exists() or not regression_path.exists():
+            print("C++ engine executables not found. Attempting to build...")
+
+            # Check if cmake is available
+            cmake_paths = ["cmake", "/opt/homebrew/bin/cmake", "/usr/local/bin/cmake"]
+            cmake_found = None
+
+            for cmake_path in cmake_paths:
+                try:
+                    result = subprocess.run(
+                        [cmake_path, "--version"], capture_output=True, check=True
+                    )
+                    cmake_found = cmake_path
+                    break
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    continue
+
+            if not cmake_found:
+                raise AssertionError(
+                    "cmake is not available! Cannot build C++ engine.\n"
+                    "Install cmake:\n"
+                    "  macOS: brew install cmake\n"
+                    "  Ubuntu/Debian: sudo apt-get install cmake"
+                )
+
+            # Try to build the engine
+            try:
+                cmd = [
+                    "bash",
+                    "-c",
+                    f"""
+                    cd engine && 
+                    mkdir -p build && 
+                    cd build && 
+                    {cmake_found} .. -DCMAKE_BUILD_TYPE=Release && 
+                    make -j$(nproc)
+                    """,
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=Path.cwd(),
+                    timeout=120,  # 2 minute timeout
+                )
+
+                if result.returncode != 0:
+                    print("=== C++ Engine Build Output ===")
+                    print(result.stdout)
+                    print("=== C++ Engine Build Errors ===")
+                    print(result.stderr)
+                    raise AssertionError(
+                        f"C++ engine build failed with return code {result.returncode}"
+                    )
+
+                print("✅ C++ engine built successfully!")
+
+            except subprocess.TimeoutExpired:
+                raise AssertionError("C++ engine build timed out after 120 seconds")
+            except Exception as e:
+                raise AssertionError(f"Failed to build C++ engine: {e}")
+
+        # Verify executables exist after build attempt
         if not engine_path.exists():
-            pytest.skip(
-                "C++ engine test executable not found. Run: cd engine/build && make test_nnue_engine"
+            raise AssertionError(
+                f"C++ engine test executable not found at {engine_path}"
+            )
+        if not regression_path.exists():
+            raise AssertionError(
+                f"C++ engine regression executable not found at {regression_path}"
             )
 
+        print(f"✅ C++ engine executables found: {engine_path}, {regression_path}")
+
     @pytest.mark.skipif(
-        not Path("engine/build/test_nnue_engine").exists(),
-        reason="C++ engine not built",
+        not Path("engine/build/test_nnue_engine").exists()
+        or not Path("engine/build/regression_test").exists(),
+        reason="C++ engine not built - will be built by test_cpp_engine_available",
     )
     def test_cpp_engine_basic_functionality(self):
         """Test that C++ engine runs without crashing."""
@@ -165,9 +239,11 @@ class TestCppPyTorchRegression:
         """Comprehensive PyTorch vs C++ regression test with detailed comparison."""
         model, feature_set, active_indices, feature_values = test_model_and_data
 
-        # Skip if C++ engine not available
+        # C++ engine should be built by test_cpp_engine_available
         if not Path("engine/build/libnnue_engine.a").exists():
-            pytest.skip("C++ engine library not built. Run: cd engine/build && make")
+            raise AssertionError(
+                "C++ engine library not built. Run test_cpp_engine_available first."
+            )
 
         with tempfile.NamedTemporaryFile(suffix=".nnue", delete=False) as f:
             model_path = Path(f.name)
@@ -183,8 +259,8 @@ class TestCppPyTorchRegression:
             # Check if regression test executable exists
             cpp_executable = Path("engine/build/regression_test")
             if not cpp_executable.exists():
-                pytest.skip(
-                    "regression_test executable not found. Build it first with: cd engine/build && make regression_test"
+                raise AssertionError(
+                    "regression_test executable not found. Run test_cpp_engine_available first."
                 )
 
             # Test multiple different input scenarios with fixed random seed for reproducibility

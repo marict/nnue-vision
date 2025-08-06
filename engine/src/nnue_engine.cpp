@@ -6,7 +6,6 @@
 
 namespace nnue {
 
-// ConvLayer implementation
 ConvLayer::ConvLayer() : scale(64.0f), out_channels(0), in_channels(0), kernel_h(0), kernel_w(0) {}
 
 bool ConvLayer::load_from_stream(std::ifstream& file) {
@@ -35,7 +34,7 @@ bool ConvLayer::load_from_stream(std::ifstream& file) {
     
     // Read weights
     int weight_count = out_channels * in_channels * kernel_h * kernel_w;
-    weights.resize(weight_count);
+    weights.resize(static_cast<size_t>(weight_count));
     file.read(reinterpret_cast<char*>(weights.data()), weight_count);
     
     // Read bias dimensions and data
@@ -62,7 +61,7 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
     const int interior_end_w = output_w - 1;
     
     for (int out_c = 0; out_c < out_channels; ++out_c) {
-        int32_t bias = biases[out_c];
+        int32_t bias = biases[static_cast<size_t>(out_c)];
         
         for (int out_h = interior_start_h; out_h < interior_end_h; ++out_h) {
             for (int out_w = interior_start_w; out_w < interior_end_w; ++out_w) {
@@ -163,7 +162,6 @@ void ConvLayer::forward(const float* input, int8_t* output, int input_h, int inp
     }
 }
 
-// FeatureTransformer implementation
 FeatureTransformer::FeatureTransformer() : scale(64.0f), num_features(0), output_size(0) {}
 
 bool FeatureTransformer::load_from_stream(std::ifstream& file) {
@@ -199,7 +197,6 @@ void FeatureTransformer::forward(const std::vector<int>& active_features, int16_
         output[i] = static_cast<int16_t>(biases[i]);
     }
     
-    // Use SIMD-optimized implementation if available
     #ifdef __AVX2__
         if (simd::has_avx2()) {
             simd::ft_forward_avx2(active_features, weights.data(), biases.data(), 
@@ -215,7 +212,6 @@ void FeatureTransformer::forward(const std::vector<int>& active_features, int16_
         }
     #endif
     
-    // Fallback to scalar implementation
     simd::ft_forward_scalar(active_features, weights.data(), biases.data(),
                           output, num_features, output_size, scale);
 }
@@ -237,7 +233,6 @@ void FeatureTransformer::add_feature(int feature_idx, int16_t* accumulator) cons
         }
     #endif
     
-    // Fallback to scalar
     simd::add_feature_scalar(feature_idx, weights.data(), accumulator, output_size);
 }
 
@@ -257,7 +252,6 @@ void FeatureTransformer::remove_feature(int feature_idx, int16_t* accumulator) c
         }
     #endif
     
-    // Fallback to scalar
     simd::remove_feature_scalar(feature_idx, weights.data(), accumulator, output_size);
 }
 
@@ -611,9 +605,7 @@ float NNUEEvaluator::evaluate(const float* image_data, int image_h, int image_w,
     // Step 5: Pass through layer stack
     float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data(), layer_stack_index);
     
-    // Step 6: Apply final scaling (consistent with PyTorch model.forward() which returns raw output)
-    // Note: PyTorch applies nnue2score only during training, not in forward()
-    return raw_output;  // Return raw output to match PyTorch model.forward()
+    return raw_output;
 }
 
 // extract_features is now implemented inline in the header
@@ -668,8 +660,7 @@ float NNUEEvaluator::evaluate_incremental(const std::vector<int>& current_featur
     // Pass through layer stack
     float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data(), layer_stack_index);
     
-    // Apply final scaling (consistent with PyTorch model.forward() which returns raw output)
-    return raw_output;  // Return raw output to match PyTorch model.forward()
+    return raw_output;
 }
 
 // Chess engine-style accumulator management
@@ -704,9 +695,8 @@ void NNUEEvaluator::update_features(const std::vector<int>& added, const std::ve
     feature_transformer_.update_accumulator(added, removed, accumulator_.data());
 }
 
-// ===== EtinyNet Implementation =====
 
-// LinearDepthwiseBlock implementation
+
 LinearDepthwiseBlock::LinearDepthwiseBlock()
      : pw_expand_scale(64.0f), dw_conv_scale(64.0f), pw_project_scale(64.0f),
       in_channels(0), mid_channels(0), out_channels(0), stride(1) {}
@@ -1360,6 +1350,6 @@ void EtinyNetEvaluator::add_skip_connection(const int8_t* input, int8_t* output,
     }
 }
 
-// ===== End EtinyNet Implementation =====
+
 
 } // namespace nnue 
