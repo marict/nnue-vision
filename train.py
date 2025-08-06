@@ -22,6 +22,7 @@ Usage Examples:
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -89,7 +90,9 @@ class CheckpointManager:
             f"📤 Uploading BEST model to wandb (epoch {epoch}, F1: {metrics.get('val_f1', 0):.3f})..."
         )
 
-        artifact_name = f"{self.run_name}-best"
+        # Sanitize run name for artifact naming (only alphanumeric, dashes, underscores, dots)
+        sanitized_run_name = re.sub(r"[^a-zA-Z0-9._-]", "_", self.run_name)
+        artifact_name = f"{sanitized_run_name}-best"
         artifact = wandb.Artifact(
             name=artifact_name,
             type="best_model",
