@@ -157,10 +157,7 @@ class TestWandbCheckpointSaving:
     ):
         """Test a full training workflow simulation with realistic upload patterns."""
         manager = CheckpointManager(temp_dir, run_name="test-run")
-        config = MockConfig(
-            # These config parameters are no longer used by CheckpointManager
-            # always_save_best_to_wandb=True, save_checkpoint_every_n_epochs=5
-        )
+        config = MockConfig()
 
         mock_run = MockWandbRun()
 

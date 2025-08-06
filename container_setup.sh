@@ -22,7 +22,7 @@ log "updating apt repositories"
 find /etc/apt -name "*.list*" -exec grep -l "nvidia\|cuda" {} \; -delete 2>/dev/null || true
 rm -rf /var/lib/apt/lists/* || true
 apt-get update || { log "apt update failed, retrying..."; dpkg --configure -a || true; apt-get update || true; }
-apt-get install -y --no-install-recommends tree htop || true
+apt-get install -y --no-install-recommends tree htop build-essential cmake || true
 
 # Set up pip cache in persistent storage for faster subsequent installs
 export PIP_CACHE_DIR="/runpod-volume/pip-cache"
@@ -38,6 +38,16 @@ pip install -r requirements-dev.txt || {
     pip install --upgrade pip
     pip install -r requirements-dev.txt
 }
+
+# Build C++ engine
+log "building C++ engine"
+cd engine
+mkdir -p build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+cd ../..
+log "C++ engine built successfully"
 
 # Set debugging env vars
 export CUDA_LAUNCH_BLOCKING=1
