@@ -37,7 +37,6 @@ deterministic = True
 seed = 42
 
 # Logging and monitoring
-log_interval = 1
 always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1

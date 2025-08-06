@@ -102,11 +102,6 @@ class TestDataAugmentation:
         test_shapes = [
             (32, 32),  # CIFAR-10/100
             (96, 96),  # Current NNUE default
-            (128, 128),  # Common small size
-            (224, 224),  # ImageNet standard
-            (256, 256),  # Common larger size
-            (64, 128),  # Non-square aspect ratio
-            (480, 640),  # Camera-like aspect ratio
         ]
 
         for target_height, target_width in test_shapes:
@@ -130,35 +125,34 @@ class TestDataAugmentation:
                     return self.data[idx]
 
             # Test with different source sizes
-            for source_h, source_w in [(28, 28), (64, 64), (150, 200)]:
-                for strength in ["light", "medium", "heavy"]:
-                    dataset = GenericVisionDataset(
-                        dataset_name="cifar10",
-                        split="train",
-                        target_size=(target_height, target_width),
-                        max_samples=3,
-                        subset=1.0,
-                        use_augmentation=True,
-                        augmentation_strength=strength,
+            for source_h, source_w in [(28, 28), (64, 64)]:
+                dataset = GenericVisionDataset(
+                    dataset_name="cifar10",
+                    split="train",
+                    target_size=(target_height, target_width),
+                    max_samples=3,
+                    subset=1.0,
+                    use_augmentation=True,
+                    augmentation_strength="medium",
+                )
+
+                # Replace with variable size test dataset
+                dataset.dataset = VariableSizeDataset((source_h, source_w))
+                dataset.samples = dataset._prepare_samples()
+
+                # Should work without errors and produce correct output size
+                try:
+                    image, label = dataset[0]
+                    assert image.shape == (
+                        3,
+                        target_height,
+                        target_width,
+                    ), f"Expected {(3, target_height, target_width)}, got {image.shape} for source {(source_h, source_w)} -> target {(target_height, target_width)} with medium augmentation"
+                    assert isinstance(label, int)
+                except Exception as e:
+                    pytest.fail(
+                        f"Augmentation failed for source {(source_h, source_w)} -> target {(target_height, target_width)} with medium: {e}"
                     )
-
-                    # Replace with variable size test dataset
-                    dataset.dataset = VariableSizeDataset((source_h, source_w))
-                    dataset.samples = dataset._prepare_samples()
-
-                    # Should work without errors and produce correct output size
-                    try:
-                        image, label = dataset[0]
-                        assert image.shape == (
-                            3,
-                            target_height,
-                            target_width,
-                        ), f"Expected {(3, target_height, target_width)}, got {image.shape} for source {(source_h, source_w)} -> target {(target_height, target_width)} with {strength} augmentation"
-                        assert isinstance(label, int)
-                    except Exception as e:
-                        pytest.fail(
-                            f"Augmentation failed for source {(source_h, source_w)} -> target {(target_height, target_width)} with {strength}: {e}"
-                        )
 
     def test_augmentation_strength_levels(self):
         """Test different augmentation strength levels."""

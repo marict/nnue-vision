@@ -40,7 +40,7 @@ from benchmarks.tinyml_benchmarks import (
     run_mlperf_tiny_benchmark,
 )
 from data.datasets import GenericVisionDataset
-from model import NNUE, GridFeatureSet
+from nnue import NNUE, GridFeatureSet
 
 
 @pytest.fixture
@@ -54,6 +54,7 @@ def small_nnue_model(device):
         l2_size=8,
         l3_size=16,
         num_classes=10,
+        input_size=32,  # Added input_size
     )
     model.to(device)
     model.eval()
@@ -118,7 +119,9 @@ class TestMACOperations:
 
     def test_conv_mac_calculation(self, small_nnue_model):
         """Test convolutional layer MAC counting."""
-        mac_counts = count_mac_operations(small_nnue_model)
+        mac_counts = count_mac_operations(
+            small_nnue_model, input_shape=(3, 96, 96)
+        )  # Explicitly pass input_shape
 
         # Manually calculate expected conv MACs
         conv = small_nnue_model.conv
@@ -294,10 +297,16 @@ class TestSparsityAnalysis:
 
         # Model with low threshold (more features active)
         low_thresh_model = NNUE(feature_set=feature_set)
+        low_thresh_model.visual_threshold = nn.Parameter(
+            torch.full_like(low_thresh_model.visual_threshold, 0.1)
+        )
         low_thresh_model.to(device).eval()
 
         # Model with high threshold (fewer features active)
         high_thresh_model = NNUE(feature_set=feature_set)
+        high_thresh_model.visual_threshold = nn.Parameter(
+            torch.full_like(high_thresh_model.visual_threshold, 0.9)
+        )
         high_thresh_model.to(device).eval()
 
         low_sparsity = analyze_sparsity(

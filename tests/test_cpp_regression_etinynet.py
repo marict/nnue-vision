@@ -6,6 +6,7 @@ numerical errors and that both engines produce identical outputs given
 identical inputs.
 """
 
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,7 +17,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from model import EtinyNet
+from nnue import EtinyNet
 
 
 class TestEtinyNetCppPyTorchRegression:
@@ -384,6 +385,12 @@ class TestEtinyNetCppPyTorchRegression:
 
     def test_pytorch_vs_cpp_etinynet_regression(self, test_model_and_data, device):
         """Test PyTorch vs C++ EtinyNet regression with serialized model."""
+        # Skip if etinynet_inference executable is not available
+        if not Path("engine/build/etinynet_inference").exists():
+            pytest.skip(
+                "etinynet_inference executable not found. Build it first with: cd engine/build && make etinynet_inference"
+            )
+
         from serialize import serialize_etinynet_model
 
         model, test_images = test_model_and_data

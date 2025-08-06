@@ -17,7 +17,7 @@ from typing import Any, Dict
 import numpy as np
 import torch
 
-from model import NNUE, EtinyNet, GridFeatureSet
+from nnue import NNUE, EtinyNet, GridFeatureSet
 
 
 def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
@@ -34,11 +34,12 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", metadata["L1"]))  # L1 size
     f.write(struct.pack("<I", metadata["L2"]))  # L2 size
     f.write(struct.pack("<I", metadata["L3"]))  # L3 size
-    f.write(struct.pack("<I", metadata["num_classes"]))  # Number of output classes
+    f.write(struct.pack("<I", 1))  # num_ls_buckets (default to 1 for new architecture)
 
     # Quantization parameters
     f.write(struct.pack("<f", metadata["nnue2score"]))
     f.write(struct.pack("<f", metadata["quantized_one"]))
+    f.write(struct.pack("<f", 0.1))  # visual_threshold (default value)
 
 
 def write_etinynet_header(f, metadata: Dict[str, Any]) -> None:
@@ -94,13 +95,12 @@ def write_conv_layer(f, conv_data: Dict[str, Any]) -> None:
     f.write(weight_bytes)
 
     # Write bias dimensions and data
-    if bias is not None:
-        f.write(struct.pack("<I", bias.shape[0]))  # out_channels
-        if hasattr(bias, "cpu"):
-            bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
-        else:
-            bias_bytes = bias.astype("<i4").tobytes()
-        f.write(bias_bytes)
+    f.write(struct.pack("<I", bias.shape[0]))  # out_channels
+    if hasattr(bias, "cpu"):
+        bias_bytes = bias.cpu().numpy().astype("<i4").tobytes()
+    else:
+        bias_bytes = bias.astype("<i4").tobytes()
+    f.write(bias_bytes)
 
 
 def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -110,7 +110,6 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<f", layer_data["pointwise_scale"]))  # pw_expand_scale
     f.write(struct.pack("<f", layer_data["depthwise2_scale"]))  # dw_conv_scale
     f.write(struct.pack("<f", layer_data["pointwise_out_scale"]))  # pw_project_scale
-    f.write(struct.pack("<f", 64.0))  # unused scale (for compatibility)
 
     # Write dimensions (required by C++ loader)
     pw_weight = layer_data["pointwise_weight"]
@@ -147,10 +146,10 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
     pw_project_weight = layer_data["pointwise_out_weight"]
     f.write(pw_project_weight.cpu().numpy().astype("i1").tobytes())
 
-    # Write unused bias count and data (for backwards compatibility)
-    unused_bias = layer_data["pointwise_out_bias"]
-    f.write(struct.pack("<I", unused_bias.shape[0]))
-    f.write(unused_bias.cpu().numpy().astype("<i4").tobytes())
+    # Write bias count and data
+    bias = layer_data["pointwise_out_bias"]
+    f.write(struct.pack("<I", bias.shape[0]))
+    f.write(bias.cpu().numpy().astype("<i4").tobytes())
 
 
 def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -390,36 +389,84 @@ def write_feature_transformer(f, ft_data: Dict[str, Any]) -> None:
     f.write(bias_bytes)
 
 
-def write_classifier(f, classifier_data: Dict[str, Any]) -> None:
-    """Write quantized classifier weights and biases."""
+def write_layer_stack(f, classifier_data: Dict[str, Any]) -> None:
+    """Write quantized layer stack in the format expected by C++ engine."""
     layers = classifier_data["layers"]
 
-    # Write number of layers
-    f.write(struct.pack("<I", len(layers)))
+    # Extract layer data
+    l1_layer = layers[0]  # L1: l1_size -> l2_size
+    l2_layer = layers[1]  # L2: l2_size -> l3_size
+    l3_layer = layers[2]  # L3: l3_size -> num_classes
 
-    # Write each layer
-    for layer in layers:
-        weight = layer["weight"]  # float32 -> int8
-        bias = layer["bias"]  # float32 -> int32
-        scale = layer["scale"]  # float32
+    # Write scales (including factorization scale)
+    f.write(struct.pack("<f", l1_layer["scale"]))  # l1_scale
+    f.write(struct.pack("<f", l2_layer["scale"]))  # l2_scale
+    f.write(struct.pack("<f", l3_layer["scale"]))  # output_scale
+    f.write(struct.pack("<f", l1_layer["scale"]))  # l1_fact_scale (use same as l1)
 
-        # Write scale
-        f.write(struct.pack("<f", scale))
+    # Write L1 layer: l1_size -> (l2_size + 1)
+    l1_weight = l1_layer["weight"]
+    l1_bias = l1_layer["bias"]
+    l2_size = l1_weight.shape[0]
+    l1_size = l1_weight.shape[1]
 
-        # Write weight
-        f.write(struct.pack("<I", weight.shape[0]))  # output_size
-        f.write(struct.pack("<I", weight.shape[1]))  # input_size
-        if hasattr(weight, "cpu"):
-            f.write(weight.cpu().numpy().astype("i1").tobytes())
-        else:
-            f.write(weight.astype("i1").tobytes())
+    # Create extended L1 layer: l1_size -> (l2_size + 1)
+    l1_extended_weight = torch.zeros(l2_size + 1, l1_size, dtype=torch.int8)
+    l1_extended_weight[:l2_size, :] = l1_weight
+    l1_extended_bias = torch.zeros(l2_size + 1, dtype=torch.int32)
+    l1_extended_bias[:l2_size] = l1_bias
 
-        # Write bias
-        f.write(struct.pack("<I", bias.shape[0]))
-        if hasattr(bias, "cpu"):
-            f.write(bias.cpu().numpy().astype("<i4").tobytes())
-        else:
-            f.write(bias.astype("<i4").tobytes())
+    f.write(struct.pack("<I", l2_size + 1))  # l1_out_size
+    f.write(struct.pack("<I", l1_size))  # l1_in_size
+    f.write(l1_extended_weight.cpu().numpy().astype("i1").tobytes())
+    f.write(struct.pack("<I", l2_size + 1))  # l1_bias_count
+    f.write(l1_extended_bias.cpu().numpy().astype("<i4").tobytes())
+
+    # Write L1 factorization layer: l1_size -> l1_size (identity)
+    f.write(struct.pack("<I", l1_size))  # l1_fact_out_size
+    f.write(struct.pack("<I", l1_size))  # l1_fact_in_size
+    # Identity matrix weights
+    identity_weights = torch.eye(l1_size, dtype=torch.int8) * 127  # Quantized identity
+    f.write(identity_weights.cpu().numpy().astype("i1").tobytes())
+    f.write(struct.pack("<I", l1_size))  # l1_fact_bias_count
+    zero_bias = torch.zeros(l1_size, dtype=torch.int32)
+    f.write(zero_bias.cpu().numpy().astype("<i4").tobytes())
+
+    # Write L2 layer: (l2_size * 2) -> l3_size
+    l2_weight = l2_layer["weight"]
+    l2_bias = l2_layer["bias"]
+    l3_size = l2_weight.shape[0]
+
+    # Create extended L2 layer: (l2_size * 2) -> l3_size
+    l2_extended_weight = torch.zeros(l3_size, l2_size * 2, dtype=torch.int8)
+    l2_extended_weight[:, :l2_size] = l2_weight
+    l2_extended_bias = l2_bias
+
+    f.write(struct.pack("<I", l3_size))  # l2_out_size
+    f.write(struct.pack("<I", l2_size * 2))  # l2_in_size
+    f.write(l2_extended_weight.cpu().numpy().astype("i1").tobytes())
+    f.write(struct.pack("<I", l3_size))  # l2_bias_count
+    f.write(l2_extended_bias.cpu().numpy().astype("<i4").tobytes())
+
+    # Write output layer: l3_size -> 1
+    l3_weight = l3_layer["weight"]
+    l3_bias = l3_layer["bias"]
+
+    # Take only the first output (since C++ expects single output)
+    output_weight = l3_weight[:1, :]  # 1 x l3_size
+    output_bias = l3_bias[:1]  # 1
+
+    f.write(struct.pack("<I", 1))  # out_out_size
+    f.write(struct.pack("<I", l3_size))  # out_in_size
+    f.write(output_weight.cpu().numpy().astype("i1").tobytes())
+    f.write(struct.pack("<I", 1))  # out_bias_count
+    f.write(output_bias.cpu().numpy().astype("<i4").tobytes())
+
+
+def write_classifier(f, classifier_data: Dict[str, Any]) -> None:
+    """Write quantized classifier weights and biases."""
+    # Use layer stack format for compatibility with C++ engine
+    write_layer_stack(f, classifier_data)
 
 
 def serialize_model(model: NNUE, output_path: Path) -> None:

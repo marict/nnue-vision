@@ -51,7 +51,7 @@ warnings.filterwarnings(
 )
 
 from data import GenericVisionDataset, create_data_loaders
-from model import NNUE, GridFeatureSet, LossParams
+from nnue import NNUE, GridFeatureSet, LossParams
 
 
 class DummyArtifact:
@@ -249,10 +249,7 @@ def sample_image_batch(device):
     targets = torch.rand(batch_size, 1, device=device)  # Between 0 and 1
     scores = torch.randn(batch_size, 1, device=device) * 100  # Search scores
 
-    # Generate layer stack indices
-    layer_stack_indices = torch.randint(0, 4, (batch_size,), device=device)
-
-    return images, targets, scores, layer_stack_indices
+    return images, targets, scores
 
 
 @pytest.fixture
@@ -264,9 +261,8 @@ def small_image_batch(device):
 
     targets = torch.rand(batch_size, 1, device=device)
     scores = torch.randn(batch_size, 1, device=device) * 50
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
 
-    return images, targets, scores, layer_stack_indices
+    return images, targets, scores
 
 
 @pytest.fixture
@@ -278,9 +274,8 @@ def tiny_image_batch(device):
 
     targets = torch.rand(batch_size, 1, device=device)
     scores = torch.randn(batch_size, 1, device=device) * 20
-    layer_stack_indices = torch.randint(0, 2, (batch_size,), device=device)
 
-    return images, targets, scores, layer_stack_indices
+    return images, targets, scores
 
 
 @pytest.fixture

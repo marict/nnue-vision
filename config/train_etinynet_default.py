@@ -33,7 +33,6 @@ deterministic = True
 seed = 42
 
 # Logging and monitoring
-log_interval = 1  # Log every step for debugging
 always_save_checkpoint = True  # Keep checkpointing enabled to avoid conflicts
 enable_progress_bar = True  # Keep progress bar enabled to avoid conflicts
 check_val_every_n_epoch = 1

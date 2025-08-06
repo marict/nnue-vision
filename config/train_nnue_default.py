@@ -14,26 +14,30 @@ name = "nnue_vision"
 
 # Dataset and model settings
 batch_size = 2
-num_workers = 1
+num_workers = 8
 num_classes = 10  # CIFAR-10 classes
 
 # NNUE model architecture (proven working)
+l1_size = 64  # Feature transformer output size
+l2_size = 32  # Expanded bottleneck
+l3_size = 8  # Second classifier hidden layer
+input_size = 32  # Model architecture: 32x32 image size
 input_size = 32  # Model architecture: 32x32 image size
 
 learning_rate = 0.01
 weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam
-subset = 0.1
-max_epochs = 2  # EtinyNet duration
+subset = 0.001
+max_epochs = 2
 patience = 999999  # Let cosine schedule finish
 max_grad_norm = 1.0
 
 # Learning rate schedule - EtinyNet's secret sauce
 use_cosine_scheduler = True  # Enable cosine annealing
 
-use_augmentation = True
-augmentation_strength = "heavy"
+use_augmentation = False
+augmentation_strength = "light"
 
 # System settings
 accelerator = "auto"
@@ -42,7 +46,6 @@ deterministic = False
 seed = 42
 
 # Logging and monitocan ring
-log_interval = 1
 always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1

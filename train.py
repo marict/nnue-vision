@@ -24,8 +24,6 @@ import argparse
 import os
 import sys
 import tempfile
-import time
-import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,13 +35,12 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 import wandb
 from config import ConfigError, load_config
 from data import create_data_loaders
+
+# Create EtinyNet model
+from nnue import NNUE, EtinyNet, GridFeatureSet
 from nnue_runpod_service import stop_runpod
 from training_utils import (
-    check_disk_space_emergency,
-    cleanup_disk_space_emergency,
     early_log,
-    get_disk_usage_percent,
-    log_git_commit_info,
     replay_early_logs_to_wandb,
 )
 
@@ -67,6 +64,9 @@ class CheckpointManager:
         config: Any,
     ) -> None:
         """Save only the best model directly to wandb (no local storage)."""
+        print(
+            f"Saving best model to wandb (epoch {epoch}, F1: {metrics.get('val_f1', 0):.3f})..."
+        )
         # Update best tracking
         self.best_metric = metrics.get("val_f1", 0)
 
@@ -177,753 +177,189 @@ def compute_metrics(outputs, targets, num_classes=1):
         }
 
 
-def train_nnue(config: Any, wandb_run_id: Optional[str] = None) -> int:
-    """NNUE training loop."""
+def train_model(
+    config: Any,
+    model_type: str,  # "nnue" or "etinynet"
+    wandb_run_id: Optional[str] = None,
+) -> int:
+    """Unified training function for both NNUE and EtinyNet models"""
+    # Common setup
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    early_log(f"🚀 Using device: {device}")
 
-    # Early logging and system info
-    early_log(f"🚀 Starting NNUE training...")
-    early_log(f"📊 Disk usage: {get_disk_usage_percent():.1f}%")
+    wandb_config = {k: v for k, v in config.__dict__.items() if not k.startswith("__")}
+    # Initialize WandB
+    wandb.init(
+        project=config.project_name,
+        config=wandb_config,
+        id=wandb_run_id,
+        resume="allow",
+    )
+    early_log(f"📤 W&B run URL: {wandb.run.url}")
+    replay_early_logs_to_wandb()
 
-    # Check for disk space emergencies early
-    if check_disk_space_emergency():
-        early_log("⚠️  Disk space is critically low!")
-        cleaned_mb = cleanup_disk_space_emergency()
-        early_log(f"🧹 Emergency cleanup freed {cleaned_mb:.1f} MB")
+    checkpoint_manager = CheckpointManager(config.log_dir, wandb.run.name)
 
-    # Log git information
-    early_log("📝 Git repository information:")
-    log_git_commit_info()
+    # Common data loading
+    train_loader, val_loader, test_loader = create_data_loaders(
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        use_augmentation=config.use_augmentation,
+        augmentation_strength=config.augmentation_strength,
+        subset=config.subset,
+        target_size=getattr(config, "target_size", None),
+        binary_classification=getattr(config, "binary_classification", None),
+    )
 
-    try:
-        # Set random seed for reproducibility
-        torch.manual_seed(getattr(config, "seed", 42))
-        np.random.seed(getattr(config, "seed", 42))
-
-        # Create NNUE model
-        from model import NNUE, GridFeatureSet, LossParams
-
-        # Set up loss parameters from config
-        loss_params = LossParams(
-            start_lambda=getattr(config, "start_lambda", 1.0),
-            end_lambda=getattr(config, "end_lambda", 1.0),
-        )
-
-        early_log("🏗️  Creating NNUE model...")
-
-        # Create feature set
+    # Model-specific initialization
+    if model_type == "nnue":
+        # NNUE-specific setup
         feature_set = GridFeatureSet(
             grid_size=getattr(config, "grid_size", 10),
             num_features_per_square=getattr(config, "num_features_per_square", 8),
         )
-
         model = NNUE(
             feature_set=feature_set,
             l1_size=getattr(config, "l1_size", 1024),
             l2_size=getattr(config, "l2_size", 15),
             l3_size=getattr(config, "l3_size", 32),
-            loss_params=loss_params,
-            num_classes=getattr(config, "num_classes", 1),
-            input_size=getattr(config, "input_size", 32),
+            num_classes=config.num_classes,
+            input_size=config.input_size,
+            weight_decay=config.weight_decay,
         )
-        early_log("✅ NNUE model created successfully")
-
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        early_log(f"📱 Using device: {device}")
-
-        # Create data loaders
-        early_log("📚 Creating data loaders...")
-        train_loader, val_loader, test_loader = create_data_loaders(
-            dataset_name=getattr(config, "dataset_name", "cifar10"),
-            batch_size=getattr(config, "batch_size", 32),
-            target_size=getattr(config, "target_size", None),
-            use_augmentation=getattr(config, "use_augmentation", True),
-            augmentation_strength=getattr(config, "augmentation_strength", "medium"),
-            max_samples_per_split=getattr(config, "max_samples_per_split", None),
-            subset=getattr(config, "subset", 1.0),
-            binary_classification=getattr(config, "binary_classification", None),
-        )
-        early_log("✅ Data loaders created successfully")
-
-        # Setup optimizer (support both Adam and SGD like EtinyNet)
-        optimizer_type = getattr(config, "optimizer_type", "adam").lower()
-        learning_rate = getattr(config, "learning_rate", 1e-3)
-        weight_decay = getattr(config, "weight_decay", 5e-4)
-
-        if optimizer_type == "sgd":
-            momentum = getattr(config, "momentum", 0.9)
-            optimizer = torch.optim.SGD(
-                model.parameters(),
-                lr=learning_rate,
-                momentum=momentum,
-                weight_decay=weight_decay,
-            )
-            early_log(
-                f"🔧 Using SGD optimizer (lr={learning_rate}, momentum={momentum}, wd={weight_decay})"
-            )
-        else:  # default to Adam
-            optimizer = torch.optim.Adam(
-                model.parameters(),
-                lr=learning_rate,
-                weight_decay=weight_decay,
-            )
-            early_log(
-                f"🔧 Using Adam optimizer (lr={learning_rate}, wd={weight_decay})"
-            )
-
-        # Setup learning rate scheduler (like EtinyNet for dynamic learning)
-        scheduler = None
-        if getattr(config, "use_cosine_scheduler", False):
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=getattr(config, "max_epochs", 100)
-            )
-            early_log(
-                f"📈 Using CosineAnnealingLR scheduler (T_max={getattr(config, 'max_epochs', 100)})"
-            )
-
-        # Setup wandb logger
-        log_dir = getattr(config, "log_dir", "logs")
-        os.makedirs(log_dir, exist_ok=True)
-
-        # Create wandb config with only serializable values
-        wandb_config = {
-            "learning_rate": getattr(config, "learning_rate", 1e-3),
-            "batch_size": getattr(config, "batch_size", 32),
-            "max_epochs": getattr(config, "max_epochs", 50),
-            "model_type": "nnue",
-            "num_classes": getattr(config, "num_classes", 1),
-            "dataset_name": getattr(config, "dataset_name", "cifar10"),
-        }
-
-        wandb_kwargs = {
-            "project": getattr(config, "project_name", "nnue_training"),
-            "config": wandb_config,
-            "dir": log_dir,
-        }
-
-        if wandb_run_id:
-            early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
-            wandb_kwargs["id"] = wandb_run_id
-            wandb_kwargs["resume"] = "allow"
-        else:
-            run_name = f"nnue-lr{config.learning_rate}-bs{config.batch_size}"
-            if hasattr(config, "note") and config.note:
-                run_name += f"-{config.note}"
-            wandb_kwargs["name"] = run_name
-
-        wandb.init(**wandb_kwargs)
-        early_log(f"📤 W&B run URL: {wandb.run.url}")
-
-        # Replay early logs to wandb
-        replay_early_logs_to_wandb()
-
-        # Setup checkpoint manager
-        checkpoint_manager = CheckpointManager(log_dir, run_name=wandb.run.name)
-
-        # Training loop setup
-        max_epochs = getattr(config, "max_epochs", 50)
-        log_interval = getattr(config, "log_interval", 50)
-        best_val_f1 = 0.0
-
-        early_log("🚀 Starting training loop...")
-
-        for epoch in range(max_epochs):
-            # Training phase
-            model.train()
-            train_loss = 0.0
-            train_metrics = {"acc": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
-            num_batches = 0
-            train_batch_times = []
-
-            for batch_idx, batch in enumerate(train_loader):
-                batch_start_time = time.time()
-
-                # Move batch to device
-                images, labels = batch
-                images, labels = images.to(device), labels.to(device)
-
-                # Adapt batch for NNUE format
-                nnue_batch = adapt_batch_for_nnue((images, labels))
-
-                # Zero gradients
-                optimizer.zero_grad()
-
-                # Forward pass and loss computation
-                loss = compute_nnue_loss(model, nnue_batch)
-
-                # Check for NaN loss - fail fast with debugging info
-                if torch.isnan(loss) or torch.isinf(loss):
-                    early_log(
-                        f"❌ NaN/Inf loss detected at epoch {epoch}, batch {batch_idx}"
-                    )
-                    early_log(f"   Loss value: {loss.item()}")
-                    early_log(f"   Learning rate: {optimizer.param_groups[0]['lr']}")
-
-                    # Log model weight stats for debugging
-                    total_norm = 0
-                    for name, param in model.named_parameters():
-                        if param.grad is not None:
-                            param_norm = param.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                            if torch.isnan(param_norm) or torch.isinf(param_norm):
-                                early_log(f"   NaN/Inf in {name}: norm={param_norm}")
-                    total_norm = total_norm ** (1.0 / 2)
-                    early_log(f"   Total parameter norm: {total_norm}")
-
-                    raise ValueError(
-                        f"NaN/Inf loss encountered at epoch {epoch}, batch {batch_idx}. "
-                        f"Loss: {loss.item()}, LR: {optimizer.param_groups[0]['lr']}"
-                    )
-
-                # Backward pass
-                loss.backward()
-
-                # Optional: Gradient clipping for stability
-                if hasattr(config, "max_grad_norm") and config.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), config.max_grad_norm
-                    )
-
-                optimizer.step()
-
-                # Accumulate metrics
-                train_loss += loss.item()
-
-                # Track batch timing
-                batch_time = time.time() - batch_start_time
-                train_batch_times.append(batch_time)
-
-                # Compute training metrics periodically
-                if batch_idx % log_interval == 0:
-                    with torch.no_grad():
-                        outputs = model(nnue_batch[0])
-                        batch_metrics = compute_metrics(
-                            outputs, nnue_batch[1], model.num_classes
-                        )
-                        for key in train_metrics:
-                            train_metrics[key] += batch_metrics[key]
-                        num_batches += 1
-
-                        # Log to wandb
-                        wandb.log(
-                            {
-                                "train/loss": loss.item(),
-                                "train/acc": batch_metrics["acc"],
-                                "train/f1": batch_metrics["f1"],
-                                "epoch": epoch,
-                                "learning_rate": optimizer.param_groups[0]["lr"],
-                            },
-                            commit=True,
-                        )
-
-                        if batch_idx % (log_interval * 10) == 0:
-                            early_log(
-                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}, time={batch_time:.3f}s"
-                            )
-
-            # Update learning rate (like EtinyNet)
-            if scheduler is not None:
-                scheduler.step()
-
-            # Average training metrics
-            if num_batches > 0:
-                for key in train_metrics:
-                    train_metrics[key] /= num_batches
-
-            # Validation phase
-            model.eval()
-            val_loss = 0.0
-            val_outputs = []
-            val_targets = []
-            val_batch_times = []
-
-            with torch.no_grad():
-                for batch in val_loader:
-                    val_batch_start_time = time.time()
-
-                    images, labels = batch
-                    images, labels = images.to(device), labels.to(device)
-
-                    # Adapt batch for NNUE format
-                    nnue_batch = adapt_batch_for_nnue((images, labels))
-
-                    # Forward pass
-                    loss = compute_nnue_loss(model, nnue_batch)
-                    outputs = model(nnue_batch[0])
-
-                    val_loss += loss.item()
-                    val_outputs.append(outputs.cpu())
-                    val_targets.append(nnue_batch[1].cpu())
-
-                    # Track validation batch timing
-                    val_batch_time = time.time() - val_batch_start_time
-                    val_batch_times.append(val_batch_time)
-
-            # Compute validation metrics
-            val_outputs = torch.cat(val_outputs)
-            val_targets = torch.cat(val_targets)
-            val_metrics = compute_metrics(val_outputs, val_targets, model.num_classes)
-            val_loss /= len(val_loader)
-
-            # Calculate timing statistics
-            avg_train_batch_time = (
-                np.mean(train_batch_times) if train_batch_times else 0.0
-            )
-            avg_val_batch_time = np.mean(val_batch_times) if val_batch_times else 0.0
-
-            # Log epoch results
-            epoch_log = {
-                "epoch": epoch,
-                "train/epoch_loss": train_loss / len(train_loader),
-                "train/epoch_acc": train_metrics["acc"],
-                "train/epoch_f1": train_metrics["f1"],
-                "train/avg_batch_time": avg_train_batch_time,
-                "val/loss": val_loss,
-                "val/f1": val_metrics["f1"],
-                "val/avg_batch_time": avg_val_batch_time,
-            }
-
-            # Debug: Print what we're logging to wandb
-            early_log(f"📊 Logging to wandb: val/f1={val_metrics['f1']:.4f}")
-            wandb.log(epoch_log, commit=True)
-
-            early_log(
-                f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
-                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}, "
-                f"train_time={avg_train_batch_time:.3f}s/batch, val_time={avg_val_batch_time:.3f}s/batch"
-            )
-
-            # Save checkpoint if validation F1 improved
-            is_best = val_metrics["f1"] > best_val_f1
-            if is_best:
-                best_val_f1 = val_metrics["f1"]
-                early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
-
-            if is_best:
-                checkpoint_manager.save_best_model_to_wandb(
-                    model,
-                    optimizer,
-                    epoch,
-                    {"val_f1": val_metrics["f1"], "val_loss": val_loss},
-                    config,
-                )
-
-        # Test evaluation
-        early_log("🧪 Running final test evaluation...")
-        model.eval()
-        test_loss = 0.0
-        test_outputs = []
-        test_targets = []
-
-        with torch.no_grad():
-            for batch in test_loader:
-                images, labels = batch
-                images, labels = images.to(device), labels.to(device)
-
-                nnue_batch = adapt_batch_for_nnue((images, labels))
-
-                loss = compute_nnue_loss(model, nnue_batch)
-                outputs = model(nnue_batch[0])
-
-                test_loss += loss.item()
-                test_outputs.append(outputs.cpu())
-                test_targets.append(nnue_batch[1].cpu())
-
-        test_outputs = torch.cat(test_outputs)
-        test_targets = torch.cat(test_targets)
-        test_metrics = compute_metrics(test_outputs, test_targets, model.num_classes)
-        test_loss /= len(test_loader)
-
-        # Log final test results
-        final_results = {
-            "final/test_loss": test_loss,
-            "final/test_acc": test_metrics["acc"],
-            "final/test_f1": test_metrics["f1"],
-            "final/test_precision": test_metrics["precision"],
-            "final/test_recall": test_metrics["recall"],
-            "final/disk_usage_percent": get_disk_usage_percent(),
-            "final/training_completed": True,
-        }
-
-        wandb.log(final_results, commit=True)
-
-        early_log("✅ NNUE training completed successfully!")
-        early_log("📦 Best model checkpoints already saved to wandb during training")
-        early_log(f"🎯 Best validation F1: {best_val_f1:.4f}")
-        early_log(f"📊 Final test F1: {test_metrics['f1']:.4f}")
-
-        wandb.finish()
-        # Stop RunPod instance if keep_alive is False
-        if not getattr(config, "keep_alive", False):
-            stop_runpod()
-
-        wandb.finish()
-        return 0
-
-    except Exception as e:
-        error_msg = f"Fatal error in NNUE training: {str(e)}"
-        early_log(f"❌ {error_msg}")
-        traceback.print_exc()
-
-        # Log error to wandb
-        try:
-            error_data = {
-                "error/message": error_msg,
-                "error/type": type(e).__name__,
-                "error/traceback": traceback.format_exc(),
-                "error/timestamp": time.time(),
-            }
-            wandb.log(error_data, commit=True)
-        except Exception as wandb_error:
-            early_log(f"⚠️  Failed to log error to wandb: {wandb_error}")
-
-        wandb.finish()
-        if not getattr(config, "keep_alive", False):
-            stop_runpod()
-        wandb.finish()
-
-
-def train_etinynet(config: Any, wandb_run_id: Optional[str] = None) -> int:
-    """EtinyNet training loop."""
-
-    # Early logging and system info
-    early_log(f"🚀 Starting EtinyNet training...")
-    early_log(f"📊 Disk usage: {get_disk_usage_percent():.1f}%")
-
-    # Check for disk space emergencies early
-    if check_disk_space_emergency():
-        early_log("⚠️  Disk space is critically low!")
-        cleaned_mb = cleanup_disk_space_emergency()
-        early_log(f"🧹 Emergency cleanup freed {cleaned_mb:.1f} MB")
-
-    # Log git information
-    early_log("📝 Git repository information:")
-    log_git_commit_info()
-
-    try:
-        # Set random seed for reproducibility
-        torch.manual_seed(getattr(config, "seed", 42))
-        np.random.seed(getattr(config, "seed", 42))
-
-        # Create EtinyNet model
-        from model import EtinyNet
-
-        variant = getattr(config, "etinynet_variant", "0.75")
-        dataset_name = getattr(config, "dataset_name", "cifar10")
-
-        # Determine number of classes based on dataset
-        if dataset_name == "cifar10":
-            num_classes = 10
-        elif dataset_name == "cifar100":
-            num_classes = 100
-        else:
-            raise ValueError(f"Unsupported dataset: {dataset_name}")
-
-        early_log("🏗️  Creating EtinyNet model...")
+        loss_fn = compute_nnue_loss
+        adapt_batch = adapt_batch_for_nnue
+    elif model_type == "etinynet":
+        # EtinyNet-specific setup
         model = EtinyNet(
-            variant=variant,
-            num_classes=num_classes,
-            input_size=32,  # CIFAR images are 32x32
-        )
-        early_log("✅ EtinyNet model created successfully")
-
-        # Setup device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        early_log(f"📱 Using device: {device}")
-
-        # Create data loaders
-        early_log("📚 Creating data loaders...")
-        train_loader, val_loader, test_loader = create_data_loaders(
-            dataset_name=dataset_name,
-            batch_size=getattr(config, "batch_size", 128),
-            target_size=getattr(config, "target_size", None),  # Allow config override
-            use_augmentation=getattr(config, "use_augmentation", True),
-            augmentation_strength=getattr(config, "augmentation_strength", "medium"),
-            max_samples_per_split=getattr(config, "max_samples_per_split", None),
-            subset=getattr(config, "subset", 1.0),
-            binary_classification=getattr(config, "binary_classification", None),
-        )
-        early_log("✅ Data loaders created successfully")
-
-        # Setup optimizer (SGD for EtinyNet as per paper)
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=getattr(config, "learning_rate", 0.1),
-            momentum=0.9,
-            weight_decay=getattr(config, "weight_decay", 1e-4),
+            variant=config.etinynet_variant,
+            num_classes=config.num_classes,
+            input_size=config.input_size,
+            weight_decay=config.weight_decay,
         )
 
-        # Setup learning rate scheduler
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=getattr(config, "max_epochs", 300)
-        )
+        def etiny_loss_fn(model, batch):
+            images, targets = batch
+            logits = model(images)
+            return torch.nn.functional.cross_entropy(logits, targets.long())
 
-        # Setup wandb logger
-        log_dir = getattr(config, "log_dir", "logs")
-        os.makedirs(log_dir, exist_ok=True)
+        loss_fn = etiny_loss_fn
+        adapt_batch = lambda batch: batch  # Identity
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
 
-        # Create wandb config with only serializable values
-        wandb_config = {
-            "learning_rate": getattr(config, "learning_rate", 0.1),
-            "batch_size": getattr(config, "batch_size", 128),
-            "max_epochs": getattr(config, "max_epochs", 300),
-            "model_type": "etinynet",
-            "etinynet_variant": variant,
-            "dataset_name": dataset_name,
-            "num_classes": num_classes,
-        }
+    model = model.to(device)
+    early_log(
+        f"🧠 Model type: {model_type}, Parameters: {sum(p.numel() for p in model.parameters()):,}"
+    )
 
-        wandb_kwargs = {
-            "project": getattr(config, "project_name", "etinynet_training"),
-            "config": wandb_config,
-            "dir": log_dir,
-        }
+    # Common optimizer setup
+    optimizer = create_optimizer(model, config)
 
-        if wandb_run_id:
-            early_log(f"🔄 Resuming W&B run: {wandb_run_id}")
-            wandb_kwargs["id"] = wandb_run_id
-            wandb_kwargs["resume"] = "allow"
-        else:
-            run_name = f"etinynet-lr{config.learning_rate}-bs{config.batch_size}"
-            if hasattr(config, "note") and config.note:
-                run_name += f"-{config.note}"
-            wandb_kwargs["name"] = run_name
+    # Training loop (common for both models)
+    best_val_f1 = 0.0
+    for epoch in range(config.max_epochs):
+        # Training phase
+        model.train()
+        for batch_idx, batch in enumerate(train_loader):
+            batch = adapt_batch(batch)
+            optimizer.zero_grad()
+            loss = loss_fn(model, batch)
+            loss.backward()
 
-        wandb.init(**wandb_kwargs)
-        early_log(f"📤 W&B run URL: {wandb.run.url}")
+            if hasattr(config, "max_grad_norm") and config.max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
 
-        # Replay early logs to wandb
-        replay_early_logs_to_wandb()
-
-        # Setup checkpoint manager
-        checkpoint_manager = CheckpointManager(log_dir, run_name=wandb.run.name)
-
-        # Training loop
-        max_epochs = getattr(config, "max_epochs", 300)
-        log_interval = getattr(config, "log_interval", 50)
-        best_val_f1 = 0.0
-
-        early_log("🚀 Starting training loop...")
-
-        for epoch in range(max_epochs):
-            # Training phase
-            model.train()
-            train_loss = 0.0
-            train_metrics = {"acc": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
-            num_batches = 0
-            train_batch_times = []
-
-            for batch_idx, batch in enumerate(train_loader):
-                batch_start_time = time.time()
-
-                # Move batch to device
-                images, targets = batch
-                images, targets = images.to(device), targets.to(device)
-
-                # Zero gradients
-                optimizer.zero_grad()
-
-                # Forward pass
-                outputs = model(images)
-                loss = F.cross_entropy(outputs, targets)
-
-                # Backward pass
-                loss.backward()
-                optimizer.step()
-
-                # Accumulate metrics
-                train_loss += loss.item()
-
-                # Track batch timing
-                batch_time = time.time() - batch_start_time
-                train_batch_times.append(batch_time)
-
-                # Compute training metrics periodically
-                if batch_idx % log_interval == 0:
-                    with torch.no_grad():
-                        batch_metrics = compute_metrics(
-                            outputs, targets.float(), num_classes
-                        )
-                        for key in train_metrics:
-                            train_metrics[key] += batch_metrics[key]
-                        num_batches += 1
-
-                        # Log to wandb
-                        wandb.log(
-                            {
-                                "train/loss": loss.item(),
-                                "train/acc": batch_metrics["acc"],
-                                "train/f1": batch_metrics["f1"],
-                                "epoch": epoch,
-                                "learning_rate": optimizer.param_groups[0]["lr"],
-                            },
-                            commit=True,
-                        )
-
-                        if batch_idx % (log_interval * 10) == 0:
-                            early_log(
-                                f"Epoch {epoch}, Batch {batch_idx}: loss={loss.item():.4f}, acc={batch_metrics['acc']:.4f}, time={batch_time:.3f}s"
-                            )
-
-            # Update learning rate
-            scheduler.step()
-
-            # Average training metrics
-            if num_batches > 0:
-                for key in train_metrics:
-                    train_metrics[key] /= num_batches
-
-            # Validation phase
-            model.eval()
-            val_loss = 0.0
-            val_outputs = []
-            val_targets = []
-            val_batch_times = []
-
-            with torch.no_grad():
-                for batch in val_loader:
-                    val_batch_start_time = time.time()
-
-                    images, targets = batch
-                    images, targets = images.to(device), targets.to(device)
-
-                    outputs = model(images)
-                    loss = F.cross_entropy(outputs, targets)
-
-                    val_loss += loss.item()
-                    val_outputs.append(outputs.cpu())
-                    val_targets.append(targets.cpu().float())
-
-                    # Track validation batch timing
-                    val_batch_time = time.time() - val_batch_start_time
-                    val_batch_times.append(val_batch_time)
-
-            # Compute validation metrics
-            val_outputs = torch.cat(val_outputs)
-            val_targets = torch.cat(val_targets)
-            val_metrics = compute_metrics(val_outputs, val_targets, num_classes)
-            val_loss /= len(val_loader)
-
-            # Calculate timing statistics
-            avg_train_batch_time = (
-                np.mean(train_batch_times) if train_batch_times else 0.0
-            )
-            avg_val_batch_time = np.mean(val_batch_times) if val_batch_times else 0.0
-
-            # Log epoch results
-            epoch_log = {
-                "epoch": epoch,
-                "train/epoch_loss": train_loss / len(train_loader),
-                "train/epoch_acc": train_metrics["acc"],
-                "train/epoch_f1": train_metrics["f1"],
-                "train/avg_batch_time": avg_train_batch_time,
-                "val/loss": val_loss,
-                "val/f1": val_metrics["f1"],
-                "val/avg_batch_time": avg_val_batch_time,
-            }
-
-            # Debug: Print what we're logging to wandb
-            early_log(f"📊 Logging to wandb: val/f1={val_metrics['f1']:.4f}")
-            wandb.log(epoch_log, commit=True)
+            optimizer.step()
 
             early_log(
-                f"Epoch {epoch}: train_loss={train_loss/len(train_loader):.4f}, "
-                f"val_loss={val_loss:.4f}, val_f1={val_metrics['f1']:.4f}, "
-                f"train_time={avg_train_batch_time:.3f}s/batch, val_time={avg_val_batch_time:.3f}s/batch"
+                f"Epoch {epoch+1}/{config.max_epochs}, "
+                f"Batch {batch_idx+1}/{len(train_loader)}, "
+                f"Loss: {loss.item():.4f}"
+            )
+            wandb.log(
+                {"train/loss": loss.item()}, step=epoch * len(train_loader) + batch_idx
             )
 
-            # Save checkpoint if validation F1 improved
-            is_best = val_metrics["f1"] > best_val_f1
-            if is_best:
-                best_val_f1 = val_metrics["f1"]
-                early_log(f"🎯 NEW BEST validation F1: {best_val_f1:.4f}")
-
-            # Determine if we should upload this checkpoint to wandb
-            should_upload_to_wandb = (is_best and config.always_save_best_to_wandb) or (
-                epoch % config.save_checkpoint_every_n_epochs == 0
+        # Validation phase
+        model.eval()
+        with torch.no_grad():
+            val_loss, val_metrics = evaluate_model(
+                model, val_loader, loss_fn, adapt_batch
             )
 
-            checkpoint_manager.save_checkpoint(
+        early_log(
+            f"Epoch {epoch+1}/{config.max_epochs} - "
+            f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, "
+            f"Val Acc: {val_metrics['acc']:.4f}"
+        )
+        wandb.log(
+            {
+                "val/loss": val_loss,
+                "val/f1": val_metrics["f1"],
+                "val/accuracy": val_metrics["acc"],
+            },
+            step=(epoch + 1) * len(train_loader) - 1,  # Log at the end of the epoch
+        )
+
+        # Save best model
+        if val_metrics["f1"] > best_val_f1:
+            best_val_f1 = val_metrics["f1"]
+            checkpoint_manager.save_best_model_to_wandb(
                 model,
                 optimizer,
                 epoch,
                 {"val_f1": val_metrics["f1"], "val_loss": val_loss},
                 config,
-                is_best=is_best,
-                upload_to_wandb=should_upload_to_wandb,
             )
 
-        # Test evaluation
-        early_log("🧪 Running final test evaluation...")
-        model.eval()
-        test_loss = 0.0
-        test_outputs = []
-        test_targets = []
+    # Final test evaluation (common)
+    test_loss, test_metrics = evaluate_model(model, test_loader, loss_fn, adapt_batch)
+    wandb.log({"test/f1": test_metrics["f1"], "test/loss": test_loss})
 
-        with torch.no_grad():
-            for batch in test_loader:
-                images, targets = batch
-                images, targets = images.to(device), targets.to(device)
+    # Cleanup
+    if not config.keep_alive:
+        stop_runpod()
 
-                outputs = model(images)
-                loss = F.cross_entropy(outputs, targets)
+    return 0
 
-                test_loss += loss.item()
-                test_outputs.append(outputs.cpu())
-                test_targets.append(targets.cpu().float())
 
-        test_outputs = torch.cat(test_outputs)
-        test_targets = torch.cat(test_targets)
-        test_metrics = compute_metrics(test_outputs, test_targets, num_classes)
-        test_loss /= len(test_loader)
+# Helper functions
+def create_optimizer(model, config):
+    """Create optimizer based on config"""
+    if config.optimizer_type == "sgd":
+        return torch.optim.SGD(
+            model.parameters(),
+            lr=config.learning_rate,
+            momentum=config.momentum,
+            weight_decay=config.weight_decay,
+        )
+    else:  # Default to Adam
+        return torch.optim.Adam(
+            model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
 
-        # Log final test results
-        final_results = {
-            "final/test_loss": test_loss,
-            "final/test_acc": test_metrics["acc"],
-            "final/test_f1": test_metrics["f1"],
-            "final/test_precision": test_metrics["precision"],
-            "final/test_recall": test_metrics["recall"],
-            "final/disk_usage_percent": get_disk_usage_percent(),
-            "final/training_completed": True,
-        }
 
-        wandb.log(final_results, commit=True)
+def evaluate_model(model, loader, loss_fn, adapt_batch):
+    """Common evaluation logic"""
+    total_loss = 0
+    all_outputs = []
+    all_targets = []
 
-        early_log("✅ EtinyNet training completed successfully!")
-        early_log("📦 Best model checkpoints already saved to wandb during training")
-        early_log(f"🎯 Best validation F1: {best_val_f1:.4f}")
-        early_log(f"📊 Final test F1: {test_metrics['f1']:.4f}")
+    for batch in loader:
+        batch = adapt_batch(batch)
+        loss = loss_fn(model, batch)
+        total_loss += loss.item()
+        outputs = model(batch[0])
+        all_outputs.append(outputs.cpu())
+        all_targets.append(batch[1].cpu())
 
-        wandb.finish()
-        # Stop RunPod instance if keep_alive is False
-        if not getattr(config, "keep_alive", False):
-            stop_runpod()
-        wandb.finish()
-
-    except Exception as e:
-        error_msg = f"Fatal error in EtinyNet training: {str(e)}"
-        early_log(f"❌ {error_msg}")
-        traceback.print_exc()
-
-        # Log error to wandb
-        try:
-            error_data = {
-                "error/message": error_msg,
-                "error/type": type(e).__name__,
-                "error/traceback": traceback.format_exc(),
-                "error/timestamp": time.time(),
-            }
-            wandb.log(error_data, commit=True)
-        except Exception as wandb_error:
-            early_log(f"⚠️  Failed to log error to wandb: {wandb_error}")
-
-        wandb.finish()
-        if not getattr(config, "keep_alive", False):
-            stop_runpod()
-        wandb.finish()
+    outputs = torch.cat(all_outputs)
+    targets = torch.cat(all_targets)
+    metrics = compute_metrics(outputs, targets, model.num_classes)
+    return total_loss / len(loader), metrics
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:
@@ -1045,13 +481,9 @@ def main():
     config = load_and_setup_config(args, args.model_type)
 
     # Run training based on model type
-    if args.model_type == "nnue":
-        return train_nnue(config, wandb_run_id=getattr(args, "wandb_run_id", None))
-    elif args.model_type == "etinynet":
-        return train_etinynet(config, wandb_run_id=getattr(args, "wandb_run_id", None))
-    else:
-        early_log(f"❌ Unknown model type: {args.model_type}")
-        return 1
+    return train_model(
+        config, args.model_type, wandb_run_id=getattr(args, "wandb_run_id", None)
+    )
 
 
 if __name__ == "__main__":

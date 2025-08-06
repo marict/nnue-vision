@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from benchmarks.mcu_simulation import MCU_SPECS, run_mcu_benchmark
 from benchmarks.tinyml_benchmarks import generate_tinyml_report
 from data.datasets import GenericVisionDataset
-from model import NNUE, GridFeatureSet
+from nnue import NNUE, GridFeatureSet
 from serialize import serialize_model
 
 

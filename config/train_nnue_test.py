@@ -7,6 +7,9 @@ project_name = "nnue_testing"
 # Training parameters
 max_epochs = 1
 batch_size = 16
+num_workers = 0
+subset = 1.0
+optimizer_type = "adam"
 learning_rate = 1e-3
 weight_decay = 5e-4
 
@@ -21,9 +24,9 @@ input_size = 32  # Native CIFAR-10 size
 dataset_name = "cifar10"
 max_samples_per_split = 32  # Use only 32 samples for fast testing
 use_augmentation = False  # Disable augmentation for speed
+augmentation_strength = "light"
 
 # Logging
-log_interval = 10
 keep_alive = False
 
 # Loss parameters

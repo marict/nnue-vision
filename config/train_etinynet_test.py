@@ -7,6 +7,12 @@ project_name = "etinynet_testing"
 # Training parameters
 max_epochs = 1
 batch_size = 16
+num_workers = 0
+subset = 0.001
+use_augmentation = False
+augmentation_strength = "light"
+optimizer_type = "sgd"
+momentum = 0.9
 learning_rate = 0.1
 weight_decay = 1e-4
 
@@ -19,7 +25,8 @@ asq_bits = 4
 dataset_name = "cifar10"
 max_samples_per_split = 32  # Use only 32 samples for fast testing
 use_augmentation = False  # Disable augmentation for speed
+num_classes = 10
+input_size = 32
 
 # Logging
-log_interval = 10
 keep_alive = False

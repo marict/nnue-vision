@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from model import NNUE, EtinyNet, GridFeatureSet
+from nnue import NNUE, EtinyNet, GridFeatureSet
 
 
 class TestWeightDecayConfiguration:

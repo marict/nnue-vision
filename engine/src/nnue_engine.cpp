@@ -761,9 +761,6 @@ bool LinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&pw_expand_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&dw_conv_scale), sizeof(float));
     file.read(reinterpret_cast<char*>(&pw_project_scale), sizeof(float));
-    // Skip unused scale (for backwards compatibility)
-    float unused_scale;
-    file.read(reinterpret_cast<char*>(&unused_scale), sizeof(float));
     
     // Read dimensions
     file.read(reinterpret_cast<char*>(&in_channels), sizeof(uint32_t));
@@ -796,10 +793,15 @@ bool LinearDepthwiseBlock::load_from_stream(std::ifstream& file) {
     pw_project_weights.resize(pw_project_weight_count);
     file.read(reinterpret_cast<char*>(pw_project_weights.data()), pw_project_weight_count);
     
-    // Skip unused bias count and data (for backwards compatibility)
-    uint32_t unused_bias_count;
-    file.read(reinterpret_cast<char*>(&unused_bias_count), sizeof(uint32_t));
-    file.seekg(unused_bias_count * sizeof(int32_t), std::ios::cur);
+    // Read bias count and data
+    uint32_t bias_count;
+    file.read(reinterpret_cast<char*>(&bias_count), sizeof(uint32_t));
+    if (bias_count != static_cast<uint32_t>(out_channels)) {
+        std::cerr << "Linear block bias count mismatch" << std::endl;
+        return false;
+    }
+    // Skip bias data (not used in forward pass)
+    file.seekg(bias_count * sizeof(int32_t), std::ios::cur);
     
     return file.good();
 }

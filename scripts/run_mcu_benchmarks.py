@@ -32,7 +32,7 @@ from benchmarks.mcu_simulation import MCU_SPECS, run_mcu_benchmark
 from benchmarks.tinyml_benchmarks import generate_tinyml_report
 from data.datasets import GenericVisionDataset
 from data.loaders import create_data_loaders
-from model import NNUE
+from nnue import NNUE
 from serialize import load_model_from_checkpoint
 
 

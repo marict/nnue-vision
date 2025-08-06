@@ -74,7 +74,7 @@ class LossParams:
 
 # Default layer sizes for NNUE (matching original implementation)
 DEFAULT_L1 = 1024
-DEFAULT_L2 = 15
+DEFAULT_L2 = 128
 DEFAULT_L3 = 32
 
 
@@ -560,22 +560,14 @@ class NNUE(nn.Module):
         quantized_data = {"metadata": metadata}
 
         # Quantize conv layer
-        quantized_data["conv_layer"] = {
-            "weight": self.conv.weight.detach().cpu().numpy(),
-            "bias": None,  # Conv layer has no bias
-            "scale": 64.0,  # Default scale for quantization
-        }
+        from serialize import quantize_conv_layer
+
+        quantized_data["conv_layer"] = quantize_conv_layer(self.conv)
 
         # Quantize feature transformer
-        quantized_data["feature_transformer"] = {
-            "weight": self.input.weight.detach().cpu().numpy(),
-            "bias": (
-                self.input.bias.detach().cpu().numpy()
-                if self.input.bias is not None
-                else None
-            ),
-            "scale": 64.0,  # Default scale for quantization
-        }
+        from serialize import quantize_linear_layer
+
+        quantized_data["feature_transformer"] = quantize_linear_layer(self.input)
 
         # Quantize simple classifier (new architecture without buckets)
         linear_layers = [
@@ -587,15 +579,7 @@ class NNUE(nn.Module):
         classifier_data = {"layers": []}
 
         for i, layer in enumerate(linear_layers):
-            layer_data = {
-                "weight": layer.weight.detach().cpu().numpy(),
-                "bias": (
-                    layer.bias.detach().cpu().numpy()
-                    if layer.bias is not None
-                    else np.zeros(layer.weight.shape[0])
-                ),
-                "scale": 64.0,  # Default scale for quantization
-            }
+            layer_data = quantize_linear_layer(layer)
             classifier_data["layers"].append(layer_data)
 
         quantized_data["classifier"] = classifier_data

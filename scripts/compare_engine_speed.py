@@ -27,7 +27,7 @@ from typing import Tuple
 
 import torch
 
-from model import NNUE, EtinyNet, GridFeatureSet
+from nnue import NNUE, EtinyNet, GridFeatureSet
 from serialize import serialize_etinynet_model, serialize_model
 
 # -------------------------------------------------------------
