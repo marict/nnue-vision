@@ -146,10 +146,11 @@ def write_depthwise_separable_layer(f, layer_data: Dict[str, Any]) -> None:
     pw_project_weight = layer_data["pointwise_out_weight"]
     f.write(pw_project_weight.cpu().numpy().astype("i1").tobytes())
 
-    # Write bias count and data
-    bias = layer_data["pointwise_out_bias"]
-    f.write(struct.pack("<I", bias.shape[0]))
-    f.write(bias.cpu().numpy().astype("<i4").tobytes())
+    # Write bias count and data (pw_project has no bias, so write zeros)
+    out_channels = layer_data["pointwise_out_weight"].shape[0]
+    f.write(struct.pack("<I", out_channels))
+    bias_data = np.zeros(out_channels, dtype=np.int32)
+    f.write(bias_data.tobytes())
 
 
 def write_linear_layer(f, layer_data: Dict[str, Any]) -> None:
@@ -256,10 +257,7 @@ def quantize_linear_depthwise_block(block, scale=64.0):
     data["pointwise_out_weight"] = pw_project_weight_q  # pw_project weights
     data["pointwise_out_scale"] = scale
 
-    # Unused fields (for backwards compatibility)
-    data["depthwise_weight"] = torch.zeros((1, 1, 3, 3), dtype=torch.int8)  # Unused
-    data["depthwise_scale"] = scale
-    data["pointwise_out_bias"] = torch.zeros(out_channels, dtype=torch.int32)  # Unused
+    # No unused fields - clean implementation
 
     return data
 

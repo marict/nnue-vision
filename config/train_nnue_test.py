@@ -19,6 +19,8 @@ l2_size = 4  # Much smaller than default
 l3_size = 8  # Much smaller than default
 num_classes = 10
 input_size = 32  # Native CIFAR-10 size
+grid_size = 8  # Smaller grid for testing
+num_features_per_square = 4  # Fewer features for testing
 
 # Dataset parameters
 dataset_name = "cifar10"
@@ -28,6 +30,7 @@ augmentation_strength = "light"
 
 # Logging
 keep_alive = False
+
 
 # Loss parameters
 start_lambda = 1.0

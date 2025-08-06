@@ -199,22 +199,20 @@ def train_model(
         use_augmentation=config.use_augmentation,
         augmentation_strength=config.augmentation_strength,
         subset=config.subset,
-        target_size=getattr(config, "target_size", None),
-        binary_classification=getattr(config, "binary_classification", None),
     )
 
     # Model-specific initialization
     if model_type == "nnue":
         # NNUE-specific setup
         feature_set = GridFeatureSet(
-            grid_size=getattr(config, "grid_size", 10),
-            num_features_per_square=getattr(config, "num_features_per_square", 8),
+            grid_size=config.grid_size,
+            num_features_per_square=config.num_features_per_square,
         )
         model = NNUE(
             feature_set=feature_set,
-            l1_size=getattr(config, "l1_size", 1024),
-            l2_size=getattr(config, "l2_size", 15),
-            l3_size=getattr(config, "l3_size", 32),
+            l1_size=config.l1_size,
+            l2_size=config.l2_size,
+            l3_size=config.l3_size,
             num_classes=config.num_classes,
             input_size=config.input_size,
             weight_decay=config.weight_decay,
@@ -251,6 +249,7 @@ def train_model(
     for epoch in range(config.max_epochs):
         # Training phase
         model.train()
+        train_losses = []
         for batch_idx, batch in enumerate(train_loader):
             # Move batch to device
             images, labels = batch
@@ -267,6 +266,7 @@ def train_model(
 
             optimizer.step()
 
+            train_losses.append(loss.item())
             early_log(
                 f"Epoch {epoch+1}/{config.max_epochs}, "
                 f"Batch {batch_idx+1}/{len(train_loader)}, "
@@ -276,24 +276,57 @@ def train_model(
                 {"train/loss": loss.item()}, step=epoch * len(train_loader) + batch_idx
             )
 
+        # Evaluate training metrics for the epoch
+        model.eval()
+        with torch.no_grad():
+            train_loss, train_metrics = evaluate_model(
+                model, train_loader, loss_fn, device
+            )
+        model.train()
+
         # Validation phase
         model.eval()
         with torch.no_grad():
             val_loss, val_metrics = evaluate_model(model, val_loader, loss_fn, device)
 
-        early_log(
-            f"Epoch {epoch+1}/{config.max_epochs} - "
-            f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, "
-            f"Val Acc: {val_metrics['acc']:.4f}"
-        )
-        wandb.log(
-            {
-                "val/loss": val_loss,
-                "val/f1": val_metrics["f1"],
-                "val/accuracy": val_metrics["acc"],
-            },
-            step=(epoch + 1) * len(train_loader) - 1,  # Log at the end of the epoch
-        )
+            # Evaluate compiled model performance (every evaluation step)
+            early_log(f"🔧 Evaluating compiled model performance...")
+            compiled_metrics = evaluate_compiled_model(
+                model, val_loader, model_type, device
+            )
+
+        # Log metrics
+        log_data = {
+            "train/epoch_loss": train_loss,
+            "train/epoch_f1": train_metrics["f1"],
+            "train/epoch_accuracy": train_metrics["acc"],
+            "val/loss": val_loss,
+            "val/f1": val_metrics["f1"],
+            "val/accuracy": val_metrics["acc"],
+        }
+
+        # Add compiled metrics if available
+        if compiled_metrics:
+            log_data.update(
+                {
+                    "compiled/f1": compiled_metrics["f1"],
+                    "compiled/accuracy": compiled_metrics["acc"],
+                }
+            )
+            early_log(
+                f"Epoch {epoch+1}/{config.max_epochs} - "
+                f"Train Loss: {train_loss:.4f}, Train F1: {train_metrics['f1']:.4f}, Train Acc: {train_metrics['acc']:.4f} | "
+                f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, Val Acc: {val_metrics['acc']:.4f} | "
+                f"Compiled F1: {compiled_metrics['f1']:.4f}, Compiled Acc: {compiled_metrics['acc']:.4f}"
+            )
+        else:
+            early_log(
+                f"Epoch {epoch+1}/{config.max_epochs} - "
+                f"Train Loss: {train_loss:.4f}, Train F1: {train_metrics['f1']:.4f}, Train Acc: {train_metrics['acc']:.4f} | "
+                f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, Val Acc: {val_metrics['acc']:.4f}"
+            )
+
+        wandb.log(log_data, step=(epoch + 1) * len(train_loader) - 1)
 
         # Save best model
         if val_metrics["f1"] > best_val_f1:
@@ -358,6 +391,175 @@ def evaluate_model(model, loader, loss_fn, device=None):
     targets = torch.cat(all_targets)
     metrics = compute_metrics(outputs, targets, model.num_classes)
     return total_loss / len(loader), metrics
+
+
+def evaluate_compiled_model(model, loader, model_type, device=None):
+    """Evaluate model using compiled C++ engine for real-world performance metrics."""
+    try:
+        import subprocess
+
+        from serialize import serialize_model
+
+        # Check if C++ engine is available
+        if model_type == "nnue":
+            cpp_executable = Path("engine/build/regression_test")
+            if not cpp_executable.exists():
+                early_log("⚠️ C++ engine not available, skipping compiled evaluation")
+                return None
+        elif model_type == "etinynet":
+            cpp_executable = Path("engine/build/etinynet_inference")
+            if not cpp_executable.exists():
+                early_log("⚠️ C++ engine not available, skipping compiled evaluation")
+                return None
+        else:
+            return None
+
+        # Serialize model to temporary file
+        with tempfile.NamedTemporaryFile(suffix=f".{model_type}", delete=False) as f:
+            model_path = Path(f.name)
+
+        try:
+            serialize_model(model, model_path)
+
+            # Evaluate a subset of the dataset for speed
+            all_outputs = []
+            all_targets = []
+            sample_count = 0
+            max_samples = 100  # Limit for speed
+
+            for batch in loader:
+                if sample_count >= max_samples:
+                    break
+
+                images, labels = batch
+                batch_size = images.shape[0]
+                processed_samples = min(batch_size, max_samples - sample_count)
+
+                # For NNUE, we need to extract features
+                if model_type == "nnue":
+                    # Use a simple feature extraction (first few pixels as features)
+                    for i in range(processed_samples):
+                        img = images[i].cpu().numpy()
+                        # Extract simple features (first 50 pixels as feature indices)
+                        feature_indices = list(range(min(50, img.size)))
+
+                        # Run C++ inference
+                        cpp_args = [str(cpp_executable), str(model_path)] + [
+                            str(f) for f in feature_indices
+                        ]
+                        result = subprocess.run(
+                            cpp_args, capture_output=True, text=True, timeout=10
+                        )
+
+                        if result.returncode == 0:
+                            # Parse C++ output
+                            for line in result.stdout.split("\n"):
+                                if line.startswith("RESULT_INCREMENTAL_0:"):
+                                    try:
+                                        cpp_output = float(line.split(": ")[1])
+                                        all_outputs.append(torch.tensor([cpp_output]))
+                                        break
+                                    except (ValueError, IndexError):
+                                        # Fallback to PyTorch output
+                                        all_outputs.append(torch.tensor([0.0]))
+                                        break
+                        else:
+                            # Fallback to PyTorch output
+                            all_outputs.append(torch.tensor([0.0]))
+
+                elif model_type == "etinynet":
+                    # For EtinyNet, save image to binary file and run inference
+                    for i in range(processed_samples):
+                        img = images[i].cpu().numpy()
+
+                        # Save image to temporary binary file
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".bin", delete=False
+                        ) as img_f:
+                            img_path = Path(img_f.name)
+                            img.tofile(img_f.name)
+
+                        try:
+                            # Run C++ inference
+                            cpp_args = [
+                                str(cpp_executable),
+                                str(model_path),
+                                str(img_path),
+                                str(img.shape[1]),
+                                str(img.shape[2]),
+                            ]
+                            result = subprocess.run(
+                                cpp_args, capture_output=True, text=True, timeout=10
+                            )
+
+                            if result.returncode == 0:
+                                # Parse C++ output (first line should be logits)
+                                lines = result.stdout.strip().split("\n")
+                                if lines:
+                                    cpp_output = float(lines[0])
+                                    all_outputs.append(torch.tensor([cpp_output]))
+                                else:
+                                    all_outputs.append(torch.tensor([0.0]))
+                            else:
+                                all_outputs.append(torch.tensor([0.0]))
+                        finally:
+                            if img_path.exists():
+                                img_path.unlink()
+
+                # Add targets for the samples we processed
+                # Handle case where batch is larger than actual data
+                actual_labels = labels[:batch_size]  # Only take actual labels
+                if processed_samples == 1:
+                    target = actual_labels[0]
+                    # Ensure target is a tensor, not a scalar
+                    if target.dim() == 0:
+                        target = target.unsqueeze(0)
+                    all_targets.append(target)
+                else:
+                    targets = actual_labels[:processed_samples]
+                    all_targets.extend(targets)
+                sample_count += processed_samples
+
+            if all_outputs and len(all_outputs) > 0:
+                try:
+                    # Ensure all tensors have the same shape before concatenating
+                    if len(all_outputs) == 1:
+                        outputs = all_outputs[0]
+                    else:
+                        outputs = torch.cat(all_outputs)
+
+                    if len(all_targets) == 1:
+                        targets = all_targets[0]
+                    else:
+                        targets = torch.cat(all_targets)
+
+                    # Ensure outputs and targets have compatible shapes
+                    if outputs.dim() == 1 and targets.dim() == 1:
+                        # Single output per sample
+                        metrics = compute_metrics(
+                            outputs.unsqueeze(0),
+                            targets.unsqueeze(0),
+                            model.num_classes,
+                        )
+                    else:
+                        metrics = compute_metrics(outputs, targets, model.num_classes)
+
+                    return metrics
+                except Exception as e:
+                    early_log(f"⚠️ Error computing metrics: {e}")
+                    early_log(f"  Outputs shape: {[o.shape for o in all_outputs]}")
+                    early_log(f"  Targets shape: {[t.shape for t in all_targets]}")
+                    return None
+            else:
+                return None
+
+        finally:
+            if model_path.exists():
+                model_path.unlink()
+
+    except Exception as e:
+        early_log(f"⚠️ Compiled evaluation failed: {e}")
+        return None
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:

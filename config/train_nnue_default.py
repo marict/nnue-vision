@@ -22,7 +22,8 @@ l1_size = 64  # Feature transformer output size
 l2_size = 32  # Expanded bottleneck
 l3_size = 8  # Second classifier hidden layer
 input_size = 32  # Model architecture: 32x32 image size
-input_size = 32  # Model architecture: 32x32 image size
+grid_size = 10  # Grid size for feature extraction
+num_features_per_square = 8  # Features per grid square
 
 learning_rate = 0.01
 weight_decay = 2e-4  # EtinyNet's weight decay

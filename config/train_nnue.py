@@ -22,6 +22,8 @@ l1_size = 1024  # Feature transformer output size
 l2_size = 128  # Expanded bottleneck
 l3_size = 32  # Second classifier hidden layer
 input_size = 32  # Model architecture: 32x32 image size
+grid_size = 10  # Grid size for feature extraction
+num_features_per_square = 8  # Features per grid square
 
 # Training settings - NNUE-optimized (post-quantization constraint removal)
 learning_rate = 0.01
@@ -51,6 +53,7 @@ always_save_checkpoint = False
 enable_progress_bar = True
 check_val_every_n_epoch = 1
 save_top_k = 1
+
 
 # Simplified: only save best models to wandb (no volume storage)
 
