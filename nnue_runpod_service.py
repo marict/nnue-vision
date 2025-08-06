@@ -39,7 +39,7 @@ def _resolve_gpu_id(gpu_type: str) -> str:
 
 
 def _extract_project_name_from_config(
-    config_path: str, model_type: str = "nnue"
+    config_path: str,
 ) -> str:
     """Extract project name from config file."""
     config = load_config(config_path)

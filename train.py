@@ -135,7 +135,7 @@ def train_model(
             early_log(f"🔧 Evaluating compiled model performance...")
             try:
                 compiled_metrics = evaluate_compiled_model(
-                    model, val_loader, model_type, device
+                    model, val_loader, model_type
                 )
             except Exception as e:
                 early_log(f"❌ Compiled model evaluation failed: {e}")

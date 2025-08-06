@@ -16,13 +16,17 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from serialize import serialize_model
 
 
-def compute_metrics(
-    outputs: torch.Tensor, targets: torch.Tensor, num_classes: int = 1
-) -> Dict[str, float]:
+def compute_metrics(outputs: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
     """Compute evaluation metrics for model outputs."""
     # Convert to numpy for sklearn metrics
     outputs_np = outputs.detach().cpu().numpy()
     targets_np = targets.detach().cpu().numpy()
+
+    # Ensure we have the right shapes
+    if outputs_np.ndim == 1:
+        outputs_np = outputs_np.reshape(-1, 1)
+    if targets_np.ndim == 1:
+        targets_np = targets_np.reshape(-1)
 
     # For binary classification or regression, use the first output
     if outputs_np.shape[1] == 1:
@@ -31,7 +35,7 @@ def compute_metrics(
     else:
         # Multi-class classification
         predictions = outputs_np.argmax(axis=1)
-        targets_binary = targets_np
+        targets_binary = targets_np.astype(int)
 
     # Compute metrics
     accuracy = accuracy_score(targets_binary, predictions)
@@ -77,7 +81,7 @@ def evaluate_model(
 
     outputs = torch.cat(all_outputs)
     targets = torch.cat(all_targets)
-    metrics = compute_metrics(outputs, targets, model.num_classes)
+    metrics = compute_metrics(outputs, targets)
     return total_loss / len(loader), metrics
 
 
@@ -85,7 +89,6 @@ def evaluate_compiled_model(
     model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
     model_type: str,
-    device: Optional[torch.device] = None,
 ) -> Dict[str, float]:
     """Evaluate model using compiled C++ engine for real-world performance metrics."""
     # Check if C++ engine is available
@@ -231,16 +234,7 @@ def evaluate_compiled_model(
                 else:
                     targets = torch.cat(all_targets)
 
-                # Ensure outputs and targets have compatible shapes
-                if outputs.dim() == 1 and targets.dim() == 1:
-                    # Single output per sample
-                    metrics = compute_metrics(
-                        outputs.unsqueeze(0),
-                        targets.unsqueeze(0),
-                        model.num_classes,
-                    )
-                else:
-                    metrics = compute_metrics(outputs, targets, model.num_classes)
+                metrics = compute_metrics(outputs, targets)
 
                 return metrics
             except Exception as e:
@@ -271,19 +265,17 @@ def evaluate_model_comprehensive(
     try:
         loss, metrics = evaluate_model(model, loader, loss_fn, device)
         results["pytorch"] = {"loss": loss, "metrics": metrics}
-    except Exception as e:
-        print(f"❌ PyTorch evaluation failed: {e}")
-        results["pytorch"] = {"error": str(e)}
+    except:
+        print(f"❌ PyTorch evaluation failed!")
+        raise
 
     # Compiled evaluation (if requested and available)
     if include_compiled:
         try:
-            compiled_metrics = evaluate_compiled_model(
-                model, loader, model_type, device
-            )
+            compiled_metrics = evaluate_compiled_model(model, loader, model_type)
             results["compiled"] = {"metrics": compiled_metrics}
-        except Exception as e:
-            print(f"❌ Compiled evaluation failed: {e}")
-            results["compiled"] = {"error": str(e)}
+        except:
+            print(f"❌ Compiled evaluation failed!")
+            raise
 
     return results
