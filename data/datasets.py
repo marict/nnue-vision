@@ -71,7 +71,7 @@ class GenericVisionDataset(Dataset):
         target_size: Optional[Tuple[int, int]] = None,  # Auto-determine from dataset
         max_samples: Optional[int] = None,
         subset: float = 1.0,
-        data_root: str = "./data/raw",
+        data_root: str = None,  # Auto-detect persistent storage
         binary_classification: Optional[dict] = None,
         use_augmentation: bool = None,
         augmentation_strength: str = "medium",
@@ -94,10 +94,25 @@ class GenericVisionDataset(Dataset):
         self.split = split
         self.max_samples = max_samples
         self.subset = subset
-        self.data_root = Path(data_root)
+
+        # Auto-detect persistent storage for datasets
+        if data_root is None:
+            # Check for RunPod volume first, then fall back to local
+            if Path("/runpod-volume").exists():
+                self.data_root = Path("/runpod-volume/datasets")
+                print(f"📁 Using persistent dataset storage: {self.data_root}")
+            else:
+                self.data_root = Path("./data/raw")
+                print(f"📁 Using local dataset storage: {self.data_root}")
+        else:
+            self.data_root = Path(data_root)
+
         self.binary_classification = binary_classification
         self.use_augmentation = use_augmentation
         self.augmentation_strength = augmentation_strength
+
+        # Ensure dataset directory exists
+        self.data_root.mkdir(parents=True, exist_ok=True)
 
         # Get dataset info
         self.dataset_info = get_dataset_info(dataset_name)

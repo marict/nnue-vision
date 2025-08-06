@@ -53,9 +53,11 @@ log "C++ engine built successfully"
 export CUDA_LAUNCH_BLOCKING=1
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Set up persistent logging
+# Set up persistent storage directories
 log_dir="/runpod-volume/nnue-vision-logs"
 mkdir -p "$log_dir/checkpoints"
+mkdir -p "/runpod-volume/datasets"
+log "dataset cache directory: /runpod-volume/datasets"
 [[ -L lightning_logs ]] || { rm -rf lightning_logs 2>/dev/null || true; ln -sf "$log_dir" lightning_logs; }
 
 # Process arguments
