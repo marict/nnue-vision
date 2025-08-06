@@ -23,6 +23,7 @@ Usage Examples:
 import argparse
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -40,6 +41,7 @@ from data import create_data_loaders
 # Create EtinyNet model
 from nnue import NNUE, EtinyNet, GridFeatureSet
 from nnue_runpod_service import stop_runpod
+from serialize import serialize_model
 from training_utils import (
     early_log,
     replay_early_logs_to_wandb,
@@ -122,17 +124,11 @@ class CheckpointManager:
         return checkpoint["epoch"], checkpoint["metrics"]
 
 
-def compute_nnue_loss(model, batch):
-    """Compute NNUE loss for training."""
+def compute_loss(model, batch):
+    """Compute loss for both NNUE and EtinyNet models."""
     images, targets = batch
-
-    # Forward pass
     logits = model(images)
-
-    # For computer vision classification, always use CrossEntropyLoss
-    loss = F.cross_entropy(logits, targets.long())
-
-    return loss
+    return F.cross_entropy(logits, targets.long())
 
 
 def compute_metrics(outputs, targets, num_classes=1):
@@ -217,7 +213,7 @@ def train_model(
             input_size=config.input_size,
             weight_decay=config.weight_decay,
         )
-        loss_fn = compute_nnue_loss
+        loss_fn = compute_loss
     elif model_type == "etinynet":
         # EtinyNet-specific setup
         model = EtinyNet(
@@ -227,12 +223,7 @@ def train_model(
             weight_decay=config.weight_decay,
         )
 
-        def etiny_loss_fn(model, batch):
-            images, targets = batch
-            logits = model(images)
-            return torch.nn.functional.cross_entropy(logits, targets.long())
-
-        loss_fn = etiny_loss_fn
+        loss_fn = compute_loss
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -291,9 +282,15 @@ def train_model(
 
             # Evaluate compiled model performance (every evaluation step)
             early_log(f"🔧 Evaluating compiled model performance...")
-            compiled_metrics = evaluate_compiled_model(
-                model, val_loader, model_type, device
-            )
+            try:
+                compiled_metrics = evaluate_compiled_model(
+                    model, val_loader, model_type, device
+                )
+            except Exception as e:
+                early_log(f"❌ Compiled model evaluation failed: {e}")
+                raise RuntimeError(
+                    f"Compiled model evaluation is required but failed: {e}"
+                )
 
         # Log metrics
         log_data = {
@@ -393,26 +390,24 @@ def evaluate_model(model, loader, loss_fn, device=None):
     return total_loss / len(loader), metrics
 
 
-def evaluate_compiled_model(model, loader, model_type, device=None):
+def evaluate_compiled_model(model, loader, model_type):
     """Evaluate model using compiled C++ engine for real-world performance metrics."""
     try:
-        import subprocess
-
-        from serialize import serialize_model
-
         # Check if C++ engine is available
         if model_type == "nnue":
             cpp_executable = Path("engine/build/regression_test")
             if not cpp_executable.exists():
-                early_log("⚠️ C++ engine not available, skipping compiled evaluation")
-                return None
+                raise RuntimeError(
+                    f"C++ NNUE engine not found: {cpp_executable}. Run 'cd engine && mkdir -p build && cd build && cmake .. && make' to build it."
+                )
         elif model_type == "etinynet":
             cpp_executable = Path("engine/build/etinynet_inference")
             if not cpp_executable.exists():
-                early_log("⚠️ C++ engine not available, skipping compiled evaluation")
-                return None
+                raise RuntimeError(
+                    f"C++ EtinyNet engine not found: {cpp_executable}. Run 'cd engine && mkdir -p build && cd build && cmake .. && make' to build it."
+                )
         else:
-            return None
+            raise ValueError(f"Unknown model type: {model_type}")
 
         # Serialize model to temporary file
         with tempfile.NamedTemporaryFile(suffix=f".{model_type}", delete=False) as f:
@@ -557,9 +552,9 @@ def evaluate_compiled_model(model, loader, model_type, device=None):
             if model_path.exists():
                 model_path.unlink()
 
-    except Exception as e:
+    except:
         early_log(f"⚠️ Compiled evaluation failed: {e}")
-        return None
+        raise e
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:

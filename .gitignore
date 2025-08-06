@@ -16,6 +16,9 @@ benchmark_results/
 test_outputs/
 example_benchmark_results/
 
+# Stored checkpoitns
+*.pt
+
 
 .DS_Store
 
