@@ -209,17 +209,13 @@ def evaluate_compiled_model(
                             img_path.unlink()
 
             # Add targets for the samples we processed
-            # Handle case where batch is larger than actual data
-            actual_labels = labels[:batch_size]  # Only take actual labels
-            if processed_samples == 1:
-                target = actual_labels[0]
+            actual_labels = labels[:batch_size]
+            for i in range(processed_samples):
+                target = actual_labels[i]
                 # Ensure target is a tensor, not a scalar
                 if target.dim() == 0:
                     target = target.unsqueeze(0)
                 all_targets.append(target)
-            else:
-                targets = actual_labels[:processed_samples]
-                all_targets.extend(targets)
             sample_count += processed_samples
 
         if all_outputs and len(all_outputs) > 0:
