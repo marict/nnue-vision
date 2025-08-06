@@ -119,17 +119,6 @@ class CheckpointManager:
         return checkpoint["epoch"], checkpoint["metrics"]
 
 
-def adapt_batch_for_nnue(batch):
-    """Adapt batch from dataset format to NNUE format."""
-    images, labels = batch
-    device = images.device
-
-    # Convert labels to targets (keep as integers for CrossEntropyLoss)
-    targets = labels.to(device)
-
-    return images, targets
-
-
 def compute_nnue_loss(model, batch):
     """Compute NNUE loss for training."""
     images, targets = batch
@@ -228,7 +217,6 @@ def train_model(
             weight_decay=config.weight_decay,
         )
         loss_fn = compute_nnue_loss
-        adapt_batch = adapt_batch_for_nnue
     elif model_type == "etinynet":
         # EtinyNet-specific setup
         model = EtinyNet(
@@ -244,7 +232,6 @@ def train_model(
             return torch.nn.functional.cross_entropy(logits, targets.long())
 
         loss_fn = etiny_loss_fn
-        adapt_batch = lambda batch: batch  # Identity
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -262,7 +249,12 @@ def train_model(
         # Training phase
         model.train()
         for batch_idx, batch in enumerate(train_loader):
-            batch = adapt_batch(batch)
+            # Move batch to device
+            images, labels = batch
+            images = images.to(device)
+            labels = labels.to(device)
+            batch = (images, labels)
+
             optimizer.zero_grad()
             loss = loss_fn(model, batch)
             loss.backward()
@@ -284,9 +276,7 @@ def train_model(
         # Validation phase
         model.eval()
         with torch.no_grad():
-            val_loss, val_metrics = evaluate_model(
-                model, val_loader, loss_fn, adapt_batch
-            )
+            val_loss, val_metrics = evaluate_model(model, val_loader, loss_fn, device)
 
         early_log(
             f"Epoch {epoch+1}/{config.max_epochs} - "
@@ -314,7 +304,7 @@ def train_model(
             )
 
     # Final test evaluation (common)
-    test_loss, test_metrics = evaluate_model(model, test_loader, loss_fn, adapt_batch)
+    test_loss, test_metrics = evaluate_model(model, test_loader, loss_fn, device)
     wandb.log({"test/f1": test_metrics["f1"], "test/loss": test_loss})
 
     # Cleanup
@@ -342,14 +332,19 @@ def create_optimizer(model, config):
         )
 
 
-def evaluate_model(model, loader, loss_fn, adapt_batch):
+def evaluate_model(model, loader, loss_fn, device=None):
     """Common evaluation logic"""
     total_loss = 0
     all_outputs = []
     all_targets = []
 
     for batch in loader:
-        batch = adapt_batch(batch)
+        # Move batch to device
+        images, labels = batch
+        images = images.to(device)
+        labels = labels.to(device)
+        batch = (images, labels)
+
         loss = loss_fn(model, batch)
         total_loss += loss.item()
         outputs = model(batch[0])
