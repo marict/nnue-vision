@@ -42,17 +42,12 @@ def _extract_project_name_from_config(
     config_path: str, model_type: str = "nnue"
 ) -> str:
     """Extract project name from config file."""
-    try:
-        config = load_config(config_path)
-        return config.project_name
-    except Exception:
-        print(f"Warning: failed to load config from {config_path}")
-        raise
+    config = load_config(config_path)
+    return config.project_name
 
 
 def _check_git_status() -> None:
     """Check for uncommitted git changes and fail if any are found."""
-    # Check if we're in a git repository
     subprocess.run(
         ["git", "rev-parse", "--git-dir"],
         capture_output=True,
@@ -61,31 +56,24 @@ def _check_git_status() -> None:
         timeout=5,
     )
 
-    try:
-        # Get git status
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
 
-        if result.stdout.strip():
-            print("❌ Uncommitted changes detected!")
-            raise RunPodError("Uncommitted changes detected!")
-
-    except subprocess.CalledProcessError:
-        raise RunPodError("Failed to check git status")
-    except subprocess.TimeoutExpired:
-        raise RunPodError("Git status check timed out")
+    if result.stdout.strip():
+        print("❌ Uncommitted changes detected!")
+        raise RunPodError("Uncommitted changes detected!")
 
 
 def _open_browser(url: str) -> None:
     """Try to open URL in browser."""
     chrome_commands = [
         "google-chrome",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "chrome",
         "chromium",
     ]
@@ -130,27 +118,22 @@ def start_cloud_training(
 ) -> str:
     """Launch RunPod GPU instance for NNUE-Vision training."""
 
-    # Check for uncommitted changes before starting training
     _check_git_status()
 
-    # Validate note
     if note and re.findall(r"[^A-Za-z0-9_-]", note):
         raise ValueError(
             "Note contains invalid characters. Only letters, numbers, hyphens, and underscores allowed."
         )
 
-    # Check environment
     if not os.getenv("WANDB_API_KEY"):
         raise RunPodError("WANDB_API_KEY environment variable must be set")
 
-    # Set up RunPod API
     runpod.api_key = api_key or os.getenv("RUNPOD_API_KEY")
     if not runpod.api_key:
         raise RunPodError(
             "RunPod API key required. Set RUNPOD_API_KEY or use --api-key"
         )
 
-    # Parse training arguments
     args_list = train_args.split() if train_args else []
     config_path = "config/train_nnue_default.py"
     model_type = "nnue"
@@ -166,28 +149,24 @@ def start_cloud_training(
 
     pod_name = _extract_project_name_from_config(config_path, model_type)
 
-    # Initialize W&B run
     placeholder_name = f"pod-id-pending{'-' + note if note else ''}"
     run = wandb.init(
         project=pod_name,
         name=placeholder_name,
         tags=["runpod", "remote-training", "nnue-vision"],
-        notes=f"Remote NNUE-Vision training on RunPod",
+        notes="Remote NNUE-Vision training on RunPod",
     )
     wandb_run_id = run.id
 
-    # Open W&B URL in browser
     wandb_url = run.url + "/logs"
     _open_browser(wandb_url)
 
-    # Build training command
     cmd = f"{script_name} {train_args}"
     if note:
         cmd += f" --note={note}"
     if wandb_run_id:
         cmd += f" --wandb-run-id={wandb_run_id}"
 
-    # Create pod
     docker_script = _create_docker_script(cmd)
     final_docker_args = _bash_c_quote(docker_script)
     gpu_type_id = _resolve_gpu_id(gpu_type)
@@ -219,7 +198,6 @@ def start_cloud_training(
     if not pod_id:
         raise RunPodError("RunPod API did not return a pod id")
 
-    # Rename W&B run to final name
     final_name = pod_id if not note else f"{pod_id} - {note}"
     wandb.run.name = final_name
     print(f"W&B run renamed to: {final_name}")
@@ -235,7 +213,6 @@ def stop_runpod(pod_id: Optional[str] = None, api_key: Optional[str] = None) -> 
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 
     if not pod_id:
-        # Not running on RunPod, nothing to stop
         return False
 
     print(f"Attempting to stop RunPod instance {pod_id}...")
@@ -243,7 +220,6 @@ def stop_runpod(pod_id: Optional[str] = None, api_key: Optional[str] = None) -> 
     if not api_key:
         raise ValueError("RUNPOD_API_KEY not set.")
 
-    # Try the Python SDK first
     try:
         runpod.api_key = api_key
         if hasattr(runpod, "stop_pod"):
@@ -253,7 +229,6 @@ def stop_runpod(pod_id: Optional[str] = None, api_key: Optional[str] = None) -> 
     except Exception as exc:
         print(f"SDK method failed: {exc}. Falling back to REST call...")
 
-    # Fallback to direct REST API
     try:
         url = f"https://rest.runpod.io/v1/pods/{pod_id}/stop"
         headers = {"Authorization": f"Bearer {api_key}"}
