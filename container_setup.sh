@@ -22,21 +22,19 @@ log "updating apt repositories"
 find /etc/apt -name "*.list*" -exec grep -l "nvidia\|cuda" {} \; -delete 2>/dev/null || true
 rm -rf /var/lib/apt/lists/* || true
 apt-get update || { log "apt update failed, retrying..."; dpkg --configure -a || true; apt-get update || true; }
-apt-get install -y --no-install-recommends tree htop build-essential cmake || true
+apt-get install -y --no-install-recommends git tree htop build-essential cmake || true
 
 # Set up pip cache in persistent storage for faster subsequent installs
 export PIP_CACHE_DIR="/runpod-volume/pip-cache"
 mkdir -p "$PIP_CACHE_DIR"
-
-log "using pip cache dir: $PIP_CACHE_DIR"
-pip install -r requirements-dev.txt
 
 # Install Python dependencies
 log "installing python dependencies"
 pip install -r requirements-dev.txt || { 
     log "pip install failed, upgrading pip and retrying"
     pip install --upgrade pip
-    pip install -r requirements-dev.txt
+# initial pass to warm cache
+pip install -r requirements-dev.txt
 }
 
 # Build C++ engine
@@ -44,7 +42,7 @@ log "building C++ engine"
 cd engine
 mkdir -p build
 cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native -fno-omit-frame-pointer -fstrict-aliasing" -DCMAKE_EXE_LINKER_FLAGS_RELEASE="-flto" -DCMAKE_CXX_FLAGS="-flto"
 make -j$(nproc)
 cd ../..
 log "C++ engine built successfully"

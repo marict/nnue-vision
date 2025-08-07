@@ -9,13 +9,12 @@ import os
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-
-from serialize import serialize_model
 
 
 def compute_metrics(outputs: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
@@ -95,14 +94,21 @@ def evaluate_compiled_model(
     """Evaluate model using compiled C++ engine for real-world performance metrics."""
     # Check if C++ engine is available
     if model_type == "nnue":
-        cpp_executable = Path("engine/build/nnue_inference")
+        # Allow override via environment for sanitizer smoke tests
+        override = os.environ.get("NNUE_ENGINE_EXEC")
+        cpp_executable = (
+            Path(override) if override else Path("engine/build/nnue_inference")
+        )
         if not cpp_executable.exists():
             raise RuntimeError(
                 f"C++ NNUE engine not found: {cpp_executable}. "
                 f"Run 'cd engine && mkdir -p build && cd build && cmake .. && make' to build it."
             )
     elif model_type == "etinynet":
-        cpp_executable = Path("engine/build/etinynet_inference")
+        override = os.environ.get("ETINY_ENGINE_EXEC")
+        cpp_executable = (
+            Path(override) if override else Path("engine/build/etinynet_inference")
+        )
         if not cpp_executable.exists():
             raise RuntimeError(
                 f"C++ EtinyNet engine not found: {cpp_executable}. "
@@ -130,20 +136,18 @@ def evaluate_compiled_model(
         # Evaluate a subset of the dataset for speed
         all_outputs = []
         all_targets = []
-        sample_count = 0
-        max_samples = 100  # Limit for speed
+        # Evaluate the entire loader (to match PyTorch eval set exactly)
 
         # Timing measurements
         total_inference_time = 0.0
         total_samples_processed = 0
 
         for batch in loader:
-            if sample_count >= max_samples:
-                break
+            # No early break; consume entire loader
 
             images, labels = batch
             batch_size = images.shape[0]
-            processed_samples = min(batch_size, max_samples - sample_count)
+            processed_samples = batch_size
 
             # For NNUE, use C++ engine for inference
             if model_type == "nnue":
@@ -227,6 +231,33 @@ def evaluate_compiled_model(
                             if img_path.exists():
                                 error_details += f"\nImage file size: {img_path.stat().st_size} bytes"
 
+                            # Persist artifacts for exact repro
+                            failure_root = Path("logs/compiled_eval_failures")
+                            timestamp_dir = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                            failure_dir = failure_root / timestamp_dir
+                            try:
+                                failure_dir.mkdir(parents=True, exist_ok=True)
+                                saved_model = failure_dir / model_path.name
+                                saved_image = failure_dir / img_path.name
+                                # Copy bytes atomically
+                                saved_model.write_bytes(model_path.read_bytes())
+                                saved_image.write_bytes(img_path.read_bytes())
+                                # Write repro script
+                                repro = failure_dir / "repro.sh"
+                                repro.write_text(
+                                    "#!/usr/bin/env bash\n"
+                                    "set -euo pipefail\n"
+                                    f'cd "{Path.cwd()}"\n'
+                                    f"{' '.join([str(cpp_executable), str(saved_model), str(saved_image), str(img.shape[1]), str(img.shape[2])])} | cat\n"
+                                )
+                                os.chmod(repro, 0o755)
+                                error_details += f"\nSaved repro to: {failure_dir}"
+                                error_details += f"\n  Model: {saved_model}"
+                                error_details += f"\n  Image: {saved_image}"
+                                error_details += f"\n  Script: {repro}"
+                            except Exception as persist_err:
+                                error_details += f"\n⚠️ Failed to persist repro artifacts: {persist_err}"
+
                             raise RuntimeError(error_details)
                     finally:
                         if img_path.exists():
@@ -240,7 +271,7 @@ def evaluate_compiled_model(
                         target = target.unsqueeze(0)
                     all_targets.append(target)
 
-                sample_count += processed_samples
+                # No sample cap; process full loader
 
             elif model_type == "etinynet":
                 # For EtinyNet, save image to binary file and run inference
@@ -355,8 +386,12 @@ def evaluate_compiled_model(
             raise RuntimeError("No outputs generated during compiled model evaluation")
 
     finally:
+        # Only remove model file if we didn't already persist it
         if model_path.exists():
-            model_path.unlink()
+            try:
+                model_path.unlink()
+            except Exception:
+                pass
 
 
 def evaluate_model_comprehensive(

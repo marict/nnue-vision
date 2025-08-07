@@ -21,13 +21,11 @@ class RunPodError(Exception):
 
 
 def _bash_c_quote(script: str) -> str:
-    """Escape script for GraphQL."""
     command = f"bash -c {shlex.quote(script)}"
     return print_string(command)[1:-1]
 
 
 def _resolve_gpu_id(gpu_type: str) -> str:
-    """Return GPU id for given type."""
     try:
         gpus = runpod.get_gpus()
         for gpu in gpus:
@@ -38,16 +36,12 @@ def _resolve_gpu_id(gpu_type: str) -> str:
         raise RunPodError(f"Failed to list GPUs: {exc}") from exc
 
 
-def _extract_project_name_from_config(
-    config_path: str,
-) -> str:
-    """Extract project name from config file."""
+def _extract_project_name_from_config(config_path: str) -> str:
     config = load_config(config_path)
     return config.project_name
 
 
 def _check_git_status() -> None:
-    """Check for uncommitted git changes and fail if any are found."""
     subprocess.run(
         ["git", "rev-parse", "--git-dir"],
         capture_output=True,
@@ -70,33 +64,11 @@ def _check_git_status() -> None:
 
 
 def _open_browser(url: str) -> None:
-    """Try to open URL in browser."""
-    chrome_commands = [
-        "google-chrome",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "chrome",
-        "chromium",
-    ]
-
-    for chrome_cmd in chrome_commands:
-        try:
-            subprocess.run(
-                [chrome_cmd, url], check=True, capture_output=True, timeout=5
-            )
-            print(f"Opened W&B URL in browser: {url}")
-            return
-        except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
-        ):
-            continue
-
-    print(f"Could not open browser automatically. Visit: {url}")
+    # Removed browser auto-open for headless environments
+    print(f"Visit: {url}")
 
 
 def _create_docker_script(training_command: str) -> str:
-    """Create Docker startup script."""
     commands = [
         "echo '[RUNPOD] Starting setup...'",
         "rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list || true",
@@ -116,7 +88,6 @@ def start_cloud_training(
     note: Optional[str] = None,
     script_name: str = "train.py",
 ) -> str:
-    """Launch RunPod GPU instance for NNUE-Vision training."""
 
     _check_git_status()
 
@@ -158,8 +129,7 @@ def start_cloud_training(
     )
     wandb_run_id = run.id
 
-    wandb_url = run.url + "/logs"
-    _open_browser(wandb_url)
+    _open_browser(run.url + "/logs")
 
     cmd = f"{script_name} {train_args}"
     if note:
@@ -208,7 +178,6 @@ def start_cloud_training(
 
 
 def stop_runpod(pod_id: Optional[str] = None, api_key: Optional[str] = None) -> bool:
-    """Stop the active RunPod instance."""
     pod_id = pod_id or os.getenv("RUNPOD_POD_ID")
     api_key = api_key or os.getenv("RUNPOD_API_KEY")
 

@@ -10,14 +10,14 @@
 namespace nnue {
 
 // Default architecture constants (can be overridden by model file)
-// Updated for 0.98M parameter target to match EtinyNet-0.98M
-constexpr int DEFAULT_L1_SIZE = 1024;
-constexpr int DEFAULT_L2_SIZE = 15;
-constexpr int DEFAULT_L3_SIZE = 32;
+
+constexpr int DEFAULT_L1_SIZE = 1024;  // matches train_nnue.l1_size
+constexpr int DEFAULT_L2_SIZE = 128;   // matches train_nnue.l2_size
+constexpr int DEFAULT_L3_SIZE = 32;    // matches train_nnue.l3_size
 constexpr int DEFAULT_INPUT_CHANNELS = 3;
 constexpr int DEFAULT_OUTPUT_CHANNELS = 8;  // Reduced from 64 to match smaller feature set
 constexpr int DEFAULT_CONV_KERNEL_SIZE = 3;
-constexpr int DEFAULT_INPUT_IMAGE_SIZE = 96;
+constexpr int DEFAULT_INPUT_IMAGE_SIZE = 32;   // matches train_nnue.input_size
 constexpr int DEFAULT_OUTPUT_GRID_SIZE = 10;  // Reduced from 32 to match smaller feature set
 
 // Quantization constants
@@ -236,11 +236,14 @@ struct DynamicGrid {
     // For larger channel counts, use direct indexing
     void from_conv_output(const int8_t* conv_data, float threshold = 0.0f) {
         clear();
+        if (grid_size <= 0 || num_channels <= 0) return;
         for (int h = 0; h < grid_size; ++h) {
             for (int w = 0; w < grid_size; ++w) {
                 uint64_t pixel_features = 0;
+                int base = (h * grid_size + w) * num_channels;
                 for (int c = 0; c < std::min(num_channels, 64); ++c) {
-                    int feature_idx = (h * grid_size + w) * num_channels + c;
+                    int feature_idx = base + c;
+                    if (feature_idx < 0) continue;
                     if (static_cast<float>(conv_data[feature_idx]) > threshold) {
                         pixel_features |= (1ULL << c);
                     }
@@ -253,16 +256,16 @@ struct DynamicGrid {
     // Extract sparse feature indices efficiently
     void extract_features(std::vector<int>& active_features) const {
         active_features.clear();
+        if (grid_size <= 0 || num_channels <= 0) return;
         for (int h = 0; h < grid_size; ++h) {
             for (int w = 0; w < grid_size; ++w) {
                 uint64_t pixel = pixels[static_cast<size_t>(h)][static_cast<size_t>(w)];
                 if (pixel != 0 && num_channels <= 64) {
-                    // Extract active bits efficiently for small channel counts
                     while (pixel) {
-                        int bit_pos = __builtin_ctzll(pixel);  // Count trailing zeros
+                        int bit_pos = __builtin_ctzll(pixel);
                         int feature_idx = (h * grid_size + w) * num_channels + bit_pos;
                         active_features.push_back(feature_idx);
-                        pixel &= pixel - 1;  // Clear lowest set bit
+                        pixel &= pixel - 1;
                     }
                 } else if (num_channels > 64) {
                     for (int c = 0; c < num_channels; ++c) {
