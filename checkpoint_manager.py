@@ -61,21 +61,8 @@ class CheckpointManager:
             f"📤 Uploading BEST model to wandb (epoch {epoch}, F1: {metrics.get('val_f1', 0):.3f})..."
         )
 
-        sanitized_run_name = re.sub(r"[^a-zA-Z0-9._-]", "_", self.run_name)
-        artifact_name = f"{sanitized_run_name}-best"
-        artifact = wandb.Artifact(
-            name=artifact_name,
-            type="best_model",
-            metadata={
-                "epoch": epoch,
-                "metrics": metrics,
-                "config_name": config.name,
-                "run_name": self.run_name,
-            },
-        )
-        artifact.add_file(tmp_path)
-        wandb.log_artifact(artifact)
-        early_log(f"✅ Best model uploaded to wandb as {artifact_name}")
+        wandb.save(tmp_path)
+        early_log(f"✅ Best model uploaded to wandb")
 
         os.unlink(tmp_path)
 

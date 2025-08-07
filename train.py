@@ -3,7 +3,9 @@
 
 import argparse
 import os
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
@@ -20,6 +22,69 @@ from training_utils import (
     early_log,
     replay_early_logs_to_wandb,
 )
+
+
+def compile_cpp_engine(model_type: str) -> bool:
+    """Compile C++ engine for the specified model type."""
+    early_log(f"🔨 Compiling C++ engine for {model_type}...")
+
+    engine_dir = Path("engine")
+    build_dir = engine_dir / "build"
+
+    # Create build directory if it doesn't exist
+    build_dir.mkdir(exist_ok=True)
+
+    try:
+        # Run cmake
+        early_log("  Running cmake...")
+        cmake_result = subprocess.run(
+            ["cmake", ".."],
+            cwd=build_dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if cmake_result.returncode != 0:
+            early_log(f"❌ CMake failed: {cmake_result.stderr}")
+            return False
+
+        # Run make
+        early_log("  Running make...")
+        make_result = subprocess.run(
+            ["make", "-j4"],
+            cwd=build_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if make_result.returncode != 0:
+            early_log(f"❌ Make failed: {make_result.stderr}")
+            return False
+
+        # Check if the expected executables were built
+        if model_type == "nnue":
+            executable = build_dir / "regression_test"
+        elif model_type == "etinynet":
+            executable = build_dir / "etinynet_inference"
+        else:
+            early_log(f"❌ Unknown model type: {model_type}")
+            return False
+
+        if executable.exists():
+            early_log(f"✅ C++ engine compiled successfully: {executable}")
+            return True
+        else:
+            early_log(f"❌ Expected executable not found: {executable}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        early_log("❌ Compilation timed out")
+        return False
+    except Exception as e:
+        early_log(f"❌ Compilation failed: {e}")
+        return False
 
 
 def compute_loss(model, batch):
@@ -91,6 +156,14 @@ def train_model(
     )
 
     optimizer = create_optimizer(model, config)
+
+    # Compile C++ engine early to catch issues
+    early_log("🔨 Pre-compiling C++ engine to catch issues early...")
+    if not compile_cpp_engine(model_type):
+        early_log("❌ C++ engine compilation failed! Training will fail later.")
+        early_log("   This is a critical error - please fix compilation issues.")
+        return 1
+    early_log("✅ C++ engine ready for compiled evaluation")
 
     best_val_f1 = 0.0
     for epoch in range(config.max_epochs):

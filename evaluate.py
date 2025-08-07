@@ -19,21 +19,6 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from serialize import serialize_model
 
 
-def extract_nnue_features(
-    model: torch.nn.Module, images: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Extract NNUE features using the same pipeline as the PyTorch model."""
-    model.eval()
-    with torch.no_grad():
-        # Move images to the same device as the model
-        device = next(model.parameters()).device
-        images = images.to(device)
-
-        # Use the same forward pass as the PyTorch model
-        outputs = model(images)
-        return outputs
-
-
 def compute_metrics(outputs: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
     """Compute evaluation metrics for model outputs."""
     # Convert to numpy for sklearn metrics
@@ -127,9 +112,8 @@ def evaluate_compiled_model(
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
-    # Serialize model to temporary file
-    with tempfile.NamedTemporaryFile(suffix=f".{model_type}", delete=False) as f:
-        model_path = Path(f.name)
+    # Serialize model to temporary file with unique name
+    model_path = Path(tempfile.mktemp(suffix=f".{model_type}"))
 
     try:
         serialize_model(model, model_path)
@@ -152,30 +136,57 @@ def evaluate_compiled_model(
             batch_size = images.shape[0]
             processed_samples = min(batch_size, max_samples - sample_count)
 
-            # For NNUE, use proper feature extraction
+            # For NNUE, use C++ engine for inference
             if model_type == "nnue":
-                # Extract features using the same pipeline as PyTorch model
-                batch_images = images[:processed_samples]
-
-                # Time the inference
-                start_time = time.time()
-                pytorch_outputs = extract_nnue_features(model, batch_images)
-                inference_time = time.time() - start_time
-
-                total_inference_time += inference_time
-                total_samples_processed += processed_samples
-
-                # For now, use PyTorch outputs directly since C++ engine needs proper feature extraction
-                # TODO: Implement proper C++ feature extraction that matches PyTorch pipeline
-                all_outputs.extend([output.unsqueeze(0) for output in pytorch_outputs])
-
-                # Add targets for the samples we processed
-                batch_labels = labels[:processed_samples]
+                # Process each sample individually with C++ engine
                 for i in range(processed_samples):
-                    target = batch_labels[i]
-                    if target.dim() == 0:
-                        target = target.unsqueeze(0)
-                    all_targets.append(target)
+                    img = images[i].cpu().numpy()
+
+                    # Save image to temporary binary file with unique name
+                    img_path = Path(tempfile.mktemp(suffix=".bin"))
+                    img.tofile(str(img_path))
+
+                    try:
+                        # Run C++ inference with timing
+                        cpp_args = [
+                            str(cpp_executable),
+                            str(model_path),
+                            str(img_path),
+                            str(img.shape[1]),
+                            str(img.shape[2]),
+                        ]
+
+                        start_time = time.time()
+                        result = subprocess.run(
+                            cpp_args, capture_output=True, text=True, timeout=10
+                        )
+                        inference_time = time.time() - start_time
+
+                        total_inference_time += inference_time
+                        total_samples_processed += 1
+
+                        if result.returncode == 0:
+                            # Parse C++ output (first line should be logits)
+                            lines = result.stdout.strip().split("\n")
+                            if lines:
+                                try:
+                                    cpp_output = float(lines[0])
+                                    all_outputs.append(torch.tensor([cpp_output]))
+                                except (ValueError, IndexError) as e:
+                                    raise RuntimeError(
+                                        f"Failed to parse C++ NNUE output: {e}. Output: {lines[0] if lines else 'empty'}"
+                                    )
+                            else:
+                                raise RuntimeError(
+                                    "C++ NNUE engine returned empty output"
+                                )
+                        else:
+                            raise RuntimeError(
+                                f"C++ NNUE engine failed with return code {result.returncode}. Stderr: {result.stderr}"
+                            )
+                    finally:
+                        if img_path.exists():
+                            img_path.unlink()
 
                 sample_count += processed_samples
 
@@ -184,12 +195,9 @@ def evaluate_compiled_model(
                 for i in range(processed_samples):
                     img = images[i].cpu().numpy()
 
-                    # Save image to temporary binary file
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".bin", delete=False
-                    ) as img_f:
-                        img_path = Path(img_f.name)
-                        img.tofile(img_f.name)
+                    # Save image to temporary binary file with unique name
+                    img_path = Path(tempfile.mktemp(suffix=".bin"))
+                    img.tofile(str(img_path))
 
                     try:
                         # Run C++ inference with timing
@@ -242,6 +250,14 @@ def evaluate_compiled_model(
                             target = target.unsqueeze(0)
                         all_targets.append(target)
                     sample_count += processed_samples
+
+            # Add targets for the samples we processed (do this once per batch)
+            batch_labels = labels[:processed_samples]
+            for i in range(processed_samples):
+                target = batch_labels[i]
+                if target.dim() == 0:
+                    target = target.unsqueeze(0)
+                all_targets.append(target)
 
         if all_outputs and len(all_outputs) > 0:
             try:
