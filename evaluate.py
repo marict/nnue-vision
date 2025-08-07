@@ -25,6 +25,10 @@ def extract_nnue_features(
     """Extract NNUE features using the same pipeline as the PyTorch model."""
     model.eval()
     with torch.no_grad():
+        # Move images to the same device as the model
+        device = next(model.parameters()).device
+        images = images.to(device)
+
         # Use the same forward pass as the PyTorch model
         outputs = model(images)
         return outputs

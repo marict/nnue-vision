@@ -51,7 +51,7 @@ class CheckpointManager:
         }
 
         with tempfile.NamedTemporaryFile(
-            suffix=f"-best-f1-{epoch:02d}-{metrics.get('val_f1', 0):.3f}.ckpt",
+            suffix="-best-model.ckpt",
             delete=False,
         ) as tmp_file:
             torch.save(checkpoint, tmp_file.name)
@@ -102,9 +102,7 @@ class CheckpointManager:
     ) -> str:
         """Save checkpoint to local storage."""
         if filename is None:
-            filename = (
-                f"checkpoint-epoch-{epoch:03d}-f1-{metrics.get('val_f1', 0):.3f}.ckpt"
-            )
+            filename = "best-model.ckpt"
 
         checkpoint_path = self.log_dir / filename
 
