@@ -241,7 +241,7 @@ def train_model(
         early_log("❌ C++ engine compilation failed! Training cannot start.")
         early_log("   This is a critical error - please fix compilation issues.")
         early_log(f"   Error details: {e}")
-        return 1
+        raise
 
     # Test C++ engine inference to verify it works
     early_log("🧪 Testing C++ engine inference with sample data...")
@@ -252,7 +252,7 @@ def train_model(
         early_log("❌ C++ engine inference test failed! Training cannot start.")
         early_log("   This is a critical error - please fix C++ engine issues.")
         early_log(f"   Error details: {e}")
-        return 1
+        raise
 
     best_val_f1 = 0.0
     for epoch in range(config.max_epochs):
@@ -356,6 +356,7 @@ def train_model(
     wandb.log({"test/f1": test_metrics["f1"], "test/loss": test_loss})
 
     if not config.keep_alive:
+        early_log("Finished training. Stopping RunPod...")
         stop_runpod()
 
     return 0
@@ -488,7 +489,17 @@ def main():
 
     config = load_and_setup_config(args, args.model_type)
 
-    return train_model(config, args.model_type, wandb_run_id=args.wandb_run_id)
+    try:
+        return train_model(config, args.model_type, wandb_run_id=args.wandb_run_id)
+    except Exception as e:
+        early_log(f"❌ Unhandled exception in training: {e}")
+        # Stop RunPod on any unhandled exception unless keep_alive is True
+        try:
+            if not getattr(config, "keep_alive", False):
+                stop_runpod()
+        except Exception as se:
+            early_log(f"⚠️ Failed to stop RunPod: {se}")
+        raise
 
 
 if __name__ == "__main__":
