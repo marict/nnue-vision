@@ -161,7 +161,8 @@ def get_disk_usage_percent() -> float:
             # Fallback using shutil
             total, used, free = shutil.disk_usage("/")
             return (used / total) * 100
-        except:
+        except Exception as e:
+            early_log(f"⚠️ Could not get disk usage: {e}")
             return 0.0
 
 
@@ -189,7 +190,8 @@ def cleanup_disk_space_emergency() -> None:
                     try:
                         if file_path.is_file():
                             file_path.unlink()
-                    except:
+                    except Exception as e:
+                        # Silently continue - this is cleanup code
                         pass
 
         early_log("✅ Emergency cleanup completed")

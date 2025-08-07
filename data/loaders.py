@@ -13,7 +13,7 @@ from .datasets import GenericVisionDataset, get_dataset_info
 def create_data_loaders(
     dataset_name: str = "cifar10",
     batch_size: int = 32,
-    num_workers: int = 4,
+    num_workers: int = 0,  # Set to 0 for faster tests, 4 for production
     target_size: Optional[Tuple[int, int]] = None,
     max_samples_per_split: Optional[int] = None,
     subset: float = 1.0,

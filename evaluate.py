@@ -95,7 +95,7 @@ def evaluate_compiled_model(
     """Evaluate model using compiled C++ engine for real-world performance metrics."""
     # Check if C++ engine is available
     if model_type == "nnue":
-        cpp_executable = Path("engine/build/regression_test")
+        cpp_executable = Path("engine/build/nnue_inference")
         if not cpp_executable.exists():
             raise RuntimeError(
                 f"C++ NNUE engine not found: {cpp_executable}. "
@@ -165,12 +165,27 @@ def evaluate_compiled_model(
                         total_samples_processed += 1
 
                         if result.returncode == 0:
-                            # Parse C++ output (first line should be logits)
+                            # Parse C++ output (format: result,density)
                             lines = result.stdout.strip().split("\n")
                             if lines:
                                 try:
-                                    cpp_output = float(lines[0])
-                                    all_outputs.append(torch.tensor([cpp_output]))
+                                    parts = lines[0].split(",")
+                                    if len(parts) >= 2:
+                                        cpp_output = float(parts[0])
+                                        density = float(parts[1])
+                                        all_outputs.append(torch.tensor([cpp_output]))
+                                        # Store density for later averaging
+                                        if not hasattr(
+                                            evaluate_compiled_model, "densities"
+                                        ):
+                                            evaluate_compiled_model.densities = []
+                                        evaluate_compiled_model.densities.append(
+                                            density
+                                        )
+                                    else:
+                                        # Fallback for old format (just result)
+                                        cpp_output = float(lines[0])
+                                        all_outputs.append(torch.tensor([cpp_output]))
                                 except (ValueError, IndexError) as e:
                                     raise RuntimeError(
                                         f"Failed to parse C++ NNUE output: {e}. Output: {lines[0] if lines else 'empty'}"
@@ -282,6 +297,21 @@ def evaluate_compiled_model(
                 else:
                     metrics["ms_per_sample"] = 0.0
 
+                # Calculate density metric (for NNUE models)
+                if (
+                    model_type == "nnue"
+                    and hasattr(evaluate_compiled_model, "densities")
+                    and evaluate_compiled_model.densities
+                ):
+                    avg_density = sum(evaluate_compiled_model.densities) / len(
+                        evaluate_compiled_model.densities
+                    )
+                    metrics["latent_density"] = avg_density
+                    # Clear the densities for next evaluation
+                    evaluate_compiled_model.densities = []
+                else:
+                    metrics["latent_density"] = 0.0
+
                 return metrics
             except Exception as e:
                 print(f"⚠️ Error computing metrics: {e}")
@@ -311,8 +341,8 @@ def evaluate_model_comprehensive(
     try:
         loss, metrics = evaluate_model(model, loader, loss_fn, device)
         results["pytorch"] = {"loss": loss, "metrics": metrics}
-    except:
-        print(f"❌ PyTorch evaluation failed!")
+    except Exception as e:
+        print(f"❌ PyTorch evaluation failed: {e}")
         raise
 
     # Compiled evaluation (if requested and available)
@@ -320,8 +350,8 @@ def evaluate_model_comprehensive(
         try:
             compiled_metrics = evaluate_compiled_model(model, loader, model_type)
             results["compiled"] = {"metrics": compiled_metrics}
-        except:
-            print(f"❌ Compiled evaluation failed!")
+        except Exception as e:
+            print(f"❌ Compiled evaluation failed: {e}")
             raise
 
     return results

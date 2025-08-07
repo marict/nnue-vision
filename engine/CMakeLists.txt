@@ -80,7 +80,11 @@ target_link_libraries(benchmark_engine nnue_engine)
 # add_executable(benchmark_etinynet_engine benchmark_etinynet_engine.cpp)
 # target_link_libraries(benchmark_etinynet_engine nnue_engine)
 
-# Add the regression test executable
+# Add the NNUE inference executable
+add_executable(nnue_inference nnue_inference.cpp)
+target_link_libraries(nnue_inference nnue_engine)
+
+# Add the NNUE regression test executable (for testing)
 add_executable(regression_test regression_test.cpp)
 target_link_libraries(regression_test nnue_engine)
 

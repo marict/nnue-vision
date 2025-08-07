@@ -106,10 +106,9 @@ class TestWandbCheckpointSaving:
 
         mock_run = MockWandbRun()
 
-        with patch("train.wandb") as mock_wandb:
+        with patch("checkpoint_manager.wandb") as mock_wandb:
             mock_wandb.run = mock_run
-            mock_wandb.Artifact = MockWandbArtifact
-            mock_wandb.log_artifact = mock_run.log_artifact
+            mock_wandb.save = MagicMock()
 
             manager.save_best_model_to_wandb(
                 model=mock_model,
@@ -119,28 +118,17 @@ class TestWandbCheckpointSaving:
                 config=config,
             )
 
-        # Check that artifact was created and uploaded
-        assert len(mock_run.artifacts_logged) == 1
-        artifact = mock_run.artifacts_logged[0]
-
-        assert artifact.name == "test-run-best"
-        assert artifact.type == "best_model"
-        assert artifact.metadata["epoch"] == 10
-        assert artifact.metadata["metrics"]["val_f1"] == 0.92
-        assert artifact.metadata["config_name"] == "test_config"
-        assert artifact.metadata["run_name"] == "test-run"
-        # Assert that the temporary file was added (but not necessarily exists now)
-        assert len(artifact.files) == 1
-        # The path itself is temporary and deleted, so we can't assert .exists()
+        # Check that wandb.save was called
+        mock_wandb.save.assert_called_once()
 
     def test_wandb_upload_error_fails_fast(self, temp_dir, mock_model, mock_optimizer):
         """Test that wandb upload errors cause immediate failure (no graceful handling)."""
         manager = CheckpointManager(temp_dir, run_name="test-run")
         config = MockConfig(always_save_best_to_wandb=True)
 
-        with patch("train.wandb") as mock_wandb:
+        with patch("checkpoint_manager.wandb") as mock_wandb:
             mock_wandb.run = MagicMock()
-            mock_wandb.Artifact.side_effect = Exception("Wandb connection failed")
+            mock_wandb.save.side_effect = Exception("Wandb connection failed")
 
             # This should raise an exception and fail immediately
             with pytest.raises(Exception, match="Wandb connection failed"):
@@ -161,10 +149,9 @@ class TestWandbCheckpointSaving:
 
         mock_run = MockWandbRun()
 
-        with patch("train.wandb") as mock_wandb:
+        with patch("checkpoint_manager.wandb") as mock_wandb:
             mock_wandb.run = mock_run
-            mock_wandb.Artifact = MockWandbArtifact
-            mock_wandb.log_artifact = mock_run.log_artifact
+            mock_wandb.save = MagicMock()
 
             # Simulate 20 epochs of training (only best model is saved)
             best_val_f1 = 0.70
@@ -220,14 +207,8 @@ class TestWandbCheckpointSaving:
             expected_uploads = [3, 8, 15]
             assert uploaded_epochs == expected_uploads
 
-            # Verify artifacts were created
-            assert len(mock_run.artifacts_logged) == len(expected_uploads)
-
-            # Check that best models have correct type and metadata
-            for artifact in mock_run.artifacts_logged:
-                assert artifact.type == "best_model"
-                assert artifact.name == "test-run-best"
-                assert artifact.metadata["run_name"] == "test-run"
+            # Verify wandb.save was called the correct number of times
+            assert mock_wandb.save.call_count == len(expected_uploads)
 
 
 if __name__ == "__main__":

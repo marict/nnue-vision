@@ -46,8 +46,9 @@ def compile_cpp_engine(model_type: str) -> bool:
         )
 
         if cmake_result.returncode != 0:
-            early_log(f"❌ CMake failed: {cmake_result.stderr}")
-            return False
+            error_msg = f"CMake failed with return code {cmake_result.returncode}:\n{cmake_result.stderr}"
+            early_log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
 
         # Run make
         early_log("  Running make...")
@@ -60,31 +61,71 @@ def compile_cpp_engine(model_type: str) -> bool:
         )
 
         if make_result.returncode != 0:
-            early_log(f"❌ Make failed: {make_result.stderr}")
-            return False
+            error_msg = f"Make failed with return code {make_result.returncode}:\n{make_result.stderr}"
+            early_log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
 
         # Check if the expected executables were built
         if model_type == "nnue":
-            executable = build_dir / "regression_test"
+            executable = build_dir / "nnue_inference"
         elif model_type == "etinynet":
             executable = build_dir / "etinynet_inference"
         else:
-            early_log(f"❌ Unknown model type: {model_type}")
-            return False
+            error_msg = f"Unknown model type: {model_type}"
+            early_log(f"❌ {error_msg}")
+            raise ValueError(error_msg)
 
         if executable.exists():
             early_log(f"✅ C++ engine compiled successfully: {executable}")
             return True
         else:
-            early_log(f"❌ Expected executable not found: {executable}")
-            return False
+            error_msg = f"Expected executable not found: {executable}"
+            early_log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
 
-    except subprocess.TimeoutExpired:
-        early_log("❌ Compilation timed out")
-        return False
+    except subprocess.TimeoutExpired as e:
+        error_msg = f"Compilation timed out: {e}"
+        early_log(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
     except Exception as e:
-        early_log(f"❌ Compilation failed: {e}")
-        return False
+        error_msg = f"Compilation failed: {e}"
+        early_log(f"❌ {error_msg}")
+        raise  # Re-raise the original exception with full details
+
+
+def test_cpp_engine_inference(model: torch.nn.Module, model_type: str) -> bool:
+    """Test C++ engine inference with a small sample to verify it works."""
+    early_log("🧪 Testing C++ engine inference...")
+
+    try:
+        # Create a small test loader with just a few samples
+        from data.loaders import create_data_loaders
+
+        test_loader, _, _ = create_data_loaders(
+            dataset_name="cifar10",
+            batch_size=2,
+            max_samples_per_split=4,
+            use_augmentation=False,
+        )
+
+        # Run a quick compiled evaluation
+        from evaluate import evaluate_compiled_model
+
+        compiled_metrics = evaluate_compiled_model(model, test_loader, model_type)
+
+        early_log(f"✅ C++ engine test successful!")
+        early_log(
+            f"   Test metrics: F1={compiled_metrics.get('f1', 0):.4f}, Acc={compiled_metrics.get('acc', 0):.4f}"
+        )
+        early_log(f"   Speed: {compiled_metrics.get('ms_per_sample', 0):.2f}ms/sample")
+        early_log(f"   Density: {compiled_metrics.get('latent_density', 0):.4f}")
+
+        return True
+
+    except Exception as e:
+        error_msg = f"C++ engine test failed: {e}"
+        early_log(f"❌ {error_msg}")
+        raise  # Re-raise the original exception with full details
 
 
 def compute_loss(model, batch):
@@ -159,11 +200,25 @@ def train_model(
 
     # Compile C++ engine early to catch issues
     early_log("🔨 Pre-compiling C++ engine to catch issues early...")
-    if not compile_cpp_engine(model_type):
-        early_log("❌ C++ engine compilation failed! Training will fail later.")
+    try:
+        compile_cpp_engine(model_type)
+        early_log("✅ C++ engine ready for compiled evaluation")
+    except Exception as e:
+        early_log("❌ C++ engine compilation failed! Training cannot start.")
         early_log("   This is a critical error - please fix compilation issues.")
+        early_log(f"   Error details: {e}")
         return 1
-    early_log("✅ C++ engine ready for compiled evaluation")
+
+    # Test C++ engine inference to verify it works
+    early_log("🧪 Testing C++ engine inference with sample data...")
+    try:
+        test_cpp_engine_inference(model, model_type)
+        early_log("✅ C++ engine inference test passed")
+    except Exception as e:
+        early_log("❌ C++ engine inference test failed! Training cannot start.")
+        early_log("   This is a critical error - please fix C++ engine issues.")
+        early_log(f"   Error details: {e}")
+        return 1
 
     best_val_f1 = 0.0
     for epoch in range(config.max_epochs):
@@ -233,13 +288,16 @@ def train_model(
                     "compiled/ms_per_sample": compiled_metrics.get(
                         "ms_per_sample", 0.0
                     ),
+                    "compiled/latent_density": compiled_metrics.get(
+                        "latent_density", 0.0
+                    ),
                 }
             )
             early_log(
                 f"Epoch {epoch+1}/{config.max_epochs} - "
                 f"Train Loss: {train_loss:.4f}, Train F1: {train_metrics['f1']:.4f}, Train Acc: {train_metrics['acc']:.4f} | "
                 f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, Val Acc: {val_metrics['acc']:.4f} | "
-                f"Compiled F1: {compiled_metrics['f1']:.4f}, Compiled Acc: {compiled_metrics['acc']:.4f}, Speed: {compiled_metrics.get('ms_per_sample', 0.0):.2f}ms/sample"
+                f"Compiled F1: {compiled_metrics['f1']:.4f}, Compiled Acc: {compiled_metrics['acc']:.4f}, Speed: {compiled_metrics.get('ms_per_sample', 0.0):.2f}ms/sample, Density: {compiled_metrics.get('latent_density', 0.0):.4f}"
             )
         else:
             early_log(

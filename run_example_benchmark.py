@@ -87,8 +87,8 @@ def main():
             try:
                 demo_model.load_state_dict(state_dict, strict=False)
                 model = demo_model
-            except:
-                print("⚠️  Model loading failed, using fresh model")
+            except Exception as e:
+                print(f"⚠️  Model loading failed: {e}, using fresh model")
                 model = demo_model
         else:
             model = create_example_model()

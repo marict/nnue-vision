@@ -1,2 +1,10 @@
 [tool.isort]
-profile = "black" 
+profile = "black"
+
+[tool.pytest.ini_options]
+timeout = 30
+addopts = "-x --tb=short --maxfail=5"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"] 

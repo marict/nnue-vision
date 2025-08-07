@@ -566,14 +566,6 @@ bool NNUEEvaluator::load_model(const std::string& path) {
     accumulator_dirty_ = true;
     incremental_enabled_ = true;  // Enable by default
     
-    std::cout << "Successfully loaded NNUE model:" << std::endl;
-    std::cout << "  Features: " << num_features_ << " (" << grid_size_ << "x" << grid_size_ 
-              << "x" << num_channels_per_square_ << ")" << std::endl;
-    std::cout << "  Architecture: " << l1_size_ << " -> " << l2_size_ << " -> " << l3_size_ << " -> 1" << std::endl;
-    std::cout << "  Layer stacks: " << num_ls_buckets_ << std::endl;
-    std::cout << "  Visual threshold: " << visual_threshold_ << std::endl;
-    std::cout << "  Incremental updates: ENABLED" << std::endl;
-    
     return true;
 }
 

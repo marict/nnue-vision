@@ -45,9 +45,8 @@ def test_checkpoint_saving_logic():
                 config=mock_config,
             )
 
-            # Check that wandb.Artifact was called
-            mock_wandb.Artifact.assert_called_once()
-            mock_wandb.log_artifact.assert_called_once()
+            # Check that wandb.save was called
+            mock_wandb.save.assert_called_once()
 
             print("✅ First checkpoint saved successfully")
 
@@ -55,9 +54,6 @@ def test_checkpoint_saving_logic():
         print("Test 2: Better checkpoint (F1: 0.7)")
 
         with patch("checkpoint_manager.wandb") as mock_wandb:
-            mock_artifact = Mock()
-            mock_wandb.Artifact.return_value = mock_artifact
-
             checkpoint_manager.save_best_model_to_wandb(
                 mock_model,
                 mock_optimizer,
@@ -72,9 +68,6 @@ def test_checkpoint_saving_logic():
         print("Test 3: Worse checkpoint (F1: 0.3)")
 
         with patch("checkpoint_manager.wandb") as mock_wandb:
-            mock_artifact = Mock()
-            mock_wandb.Artifact.return_value = mock_artifact
-
             checkpoint_manager.save_best_model_to_wandb(
                 mock_model,
                 mock_optimizer,
@@ -85,7 +78,7 @@ def test_checkpoint_saving_logic():
 
             # This should still save because the function doesn't check if it's better
             # The check happens in the training loop, not in the save function
-            mock_wandb.Artifact.assert_called_once()
+            mock_wandb.save.assert_called_once()
             print("✅ Checkpoint save function works (training loop handles the logic)")
 
 

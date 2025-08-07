@@ -594,6 +594,10 @@ public:
     int get_num_channels_per_square() const { return num_channels_per_square_; }
     float get_visual_threshold() const { return visual_threshold_; }
     
+    // Get active features and total features for density calculation
+    void get_active_features(std::vector<int>& features) const { features = active_features_; }
+    int get_total_features() const { return num_features_; }
+    
     // Utility functions
     static std::vector<int> extract_features(const int8_t* grid_data, 
                                            int grid_size, int num_channels,

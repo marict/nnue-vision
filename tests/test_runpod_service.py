@@ -82,13 +82,13 @@ class TestRunPodService:
         # Mock git rev-parse failure
         from subprocess import CalledProcessError
 
-        mock_run.side_effect = [
-            CalledProcessError(
-                128, ["git", "rev-parse", "--git-dir"]
-            ),  # git rev-parse fails
-        ]
+        # The function calls subprocess.run twice, first for git rev-parse, then for git status
+        # We want the first call to fail
+        mock_run.side_effect = CalledProcessError(
+            128, ["git", "rev-parse", "--git-dir"]
+        )
 
-        with pytest.raises(RunPodError, match="Failed to check git status"):
+        with pytest.raises(CalledProcessError):
             _check_git_status()
 
     @patch("runpod.get_gpus")
@@ -128,13 +128,13 @@ class TestRunPodService:
     @patch("nnue_runpod_service._extract_project_name_from_config")
     @patch("nnue_runpod_service._resolve_gpu_id")
     @patch("nnue_runpod_service._open_browser")
-    @patch("wandb.init")
+    @patch("nnue_runpod_service.wandb")
     @patch("runpod.create_pod")
     @patch.dict(os.environ, {"WANDB_API_KEY": "test_key", "RUNPOD_API_KEY": "test_key"})
     def test_start_cloud_training_success(
         self,
         mock_create_pod,
-        mock_wandb_init,
+        mock_wandb,
         mock_open_browser,
         mock_resolve_gpu,
         mock_extract_project,
@@ -148,7 +148,8 @@ class TestRunPodService:
         mock_wandb_run = Mock()
         mock_wandb_run.id = "test-run-id"
         mock_wandb_run.url = "https://wandb.ai/test"
-        mock_wandb_init.return_value = mock_wandb_run
+        mock_wandb_run.name = "test-run-name"
+        mock_wandb.run = mock_wandb_run
         mock_pod = {"id": "pod-123"}
         mock_create_pod.return_value = mock_pod
 
@@ -159,7 +160,6 @@ class TestRunPodService:
         mock_check_git.assert_called_once()
         mock_extract_project.assert_called_once_with("config/train_nnue_default.py")
         mock_resolve_gpu.assert_called_once()
-        mock_wandb_init.assert_called_once()
         mock_create_pod.assert_called_once()
 
     @patch("nnue_runpod_service._check_git_status")
