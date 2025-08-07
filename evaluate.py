@@ -8,6 +8,7 @@ PyTorch and compiled C++ engine evaluation.
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -135,6 +136,10 @@ def evaluate_compiled_model(
         sample_count = 0
         max_samples = 100  # Limit for speed
 
+        # Timing measurements
+        total_inference_time = 0.0
+        total_samples_processed = 0
+
         for batch in loader:
             if sample_count >= max_samples:
                 break
@@ -147,7 +152,14 @@ def evaluate_compiled_model(
             if model_type == "nnue":
                 # Extract features using the same pipeline as PyTorch model
                 batch_images = images[:processed_samples]
+
+                # Time the inference
+                start_time = time.time()
                 pytorch_outputs = extract_nnue_features(model, batch_images)
+                inference_time = time.time() - start_time
+
+                total_inference_time += inference_time
+                total_samples_processed += processed_samples
 
                 # For now, use PyTorch outputs directly since C++ engine needs proper feature extraction
                 # TODO: Implement proper C++ feature extraction that matches PyTorch pipeline
@@ -176,7 +188,7 @@ def evaluate_compiled_model(
                         img.tofile(img_f.name)
 
                     try:
-                        # Run C++ inference
+                        # Run C++ inference with timing
                         cpp_args = [
                             str(cpp_executable),
                             str(model_path),
@@ -184,9 +196,15 @@ def evaluate_compiled_model(
                             str(img.shape[1]),
                             str(img.shape[2]),
                         ]
+
+                        start_time = time.time()
                         result = subprocess.run(
                             cpp_args, capture_output=True, text=True, timeout=10
                         )
+                        inference_time = time.time() - start_time
+
+                        total_inference_time += inference_time
+                        total_samples_processed += 1
 
                         if result.returncode == 0:
                             # Parse C++ output (first line should be logits)
@@ -235,6 +253,15 @@ def evaluate_compiled_model(
                     targets = torch.cat(all_targets)
 
                 metrics = compute_metrics(outputs, targets)
+
+                # Calculate speed metrics
+                if total_samples_processed > 0:
+                    avg_ms_per_sample = (
+                        total_inference_time / total_samples_processed
+                    ) * 1000
+                    metrics["ms_per_sample"] = avg_ms_per_sample
+                else:
+                    metrics["ms_per_sample"] = 0.0
 
                 return metrics
             except Exception as e:

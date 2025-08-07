@@ -66,6 +66,14 @@ def test_complete_fix_verification():
 
     print("   ✅ Compiled evaluation fix verified")
 
+    # Check that speed metric is present
+    assert (
+        "ms_per_sample" in compiled_metrics
+    ), "Speed metric not found in compiled metrics"
+    print(
+        f"   ✅ Speed benchmark: {compiled_metrics['ms_per_sample']:.2f} ms per sample"
+    )
+
     print("\n2. Testing checkpoint saving fix...")
 
     # Test checkpoint saving logic
@@ -188,6 +196,7 @@ def test_complete_fix_verification():
     print("\n=== All Fixes Verified Successfully! ===")
     print("✅ Compiled evaluation now uses proper feature extraction")
     print("✅ Compiled and validation metrics are consistent")
+    print("✅ Speed benchmark (ms per sample) is working")
     print("✅ Checkpoint saving logic works correctly")
     print("✅ Metric calculation is robust")
     print("✅ Error handling is comprehensive")
@@ -219,6 +228,7 @@ def test_fix_summary():
     print("\n✅ VERIFICATION:")
     print("   - Compiled and validation metrics now match (difference < 0.05)")
     print("   - No more artificially high compiled scores")
+    print("   - Speed benchmark (ms per sample) is working")
     print("   - Proper error handling for missing C++ executables")
     print("   - Comprehensive test coverage added")
 
@@ -232,6 +242,7 @@ def test_fix_summary():
     print("   - Monitor training to see if F1 improves")
     print("   - Checkpoint saving will occur when F1 > previous best")
     print("   - Compiled evaluation now provides accurate real-world metrics")
+    print("   - Speed benchmark provides performance insights")
     print("   - All systems are functioning as expected")
 
 

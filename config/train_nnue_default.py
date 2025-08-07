@@ -30,7 +30,7 @@ weight_decay = 2e-4  # EtinyNet's weight decay
 momentum = 0.9  # SGD momentum (EtinyNet uses this)
 optimizer_type = "sgd"  # Use SGD instead of Adam
 subset = 0.0001
-max_epochs = 2
+max_epochs = 1
 patience = 999999  # Let cosine schedule finish
 max_grad_norm = 1.0
 

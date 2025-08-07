@@ -157,13 +157,16 @@ def train_model(
                 {
                     "compiled/f1": compiled_metrics["f1"],
                     "compiled/accuracy": compiled_metrics["acc"],
+                    "compiled/ms_per_sample": compiled_metrics.get(
+                        "ms_per_sample", 0.0
+                    ),
                 }
             )
             early_log(
                 f"Epoch {epoch+1}/{config.max_epochs} - "
                 f"Train Loss: {train_loss:.4f}, Train F1: {train_metrics['f1']:.4f}, Train Acc: {train_metrics['acc']:.4f} | "
                 f"Val Loss: {val_loss:.4f}, Val F1: {val_metrics['f1']:.4f}, Val Acc: {val_metrics['acc']:.4f} | "
-                f"Compiled F1: {compiled_metrics['f1']:.4f}, Compiled Acc: {compiled_metrics['acc']:.4f}"
+                f"Compiled F1: {compiled_metrics['f1']:.4f}, Compiled Acc: {compiled_metrics['acc']:.4f}, Speed: {compiled_metrics.get('ms_per_sample', 0.0):.2f}ms/sample"
             )
         else:
             early_log(
