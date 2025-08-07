@@ -147,7 +147,7 @@ def start_cloud_training(
         except ValueError:
             config_path = f"config/train_{model_type}_default.py"
 
-    pod_name = _extract_project_name_from_config(config_path, model_type)
+    pod_name = _extract_project_name_from_config(config_path)
 
     placeholder_name = f"pod-id-pending{'-' + note if note else ''}"
     run = wandb.init(
