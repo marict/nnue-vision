@@ -934,11 +934,7 @@ bool EtinyNetEvaluator::load_model(const std::string& path) {
     calculate_layer_dimensions();
     allocate_working_buffers();
     
-    std::cout << "Successfully loaded EtinyNet model:" << std::endl;
-    std::cout << "  Variant: EtinyNet-" << variant_ << std::endl;
-    std::cout << "  Input size: " << input_size_ << "x" << input_size_ << std::endl;
-    std::cout << "  Classes: " << num_classes_ << std::endl;
-    std::cout << "  ASQ enabled: " << (use_asq_ ? "YES" : "NO") << std::endl;
+    // Debug output removed for clean inference
     
     return true;
 }
@@ -1077,8 +1073,7 @@ bool EtinyNetEvaluator::load_layers(std::ifstream& file) {
         return false;
     }
     
-    std::cout << "Loaded EtinyNet: " << lb_layers_.size() << " LB blocks, "
-              << dlb_layers_.size() << " DLB blocks, 1 classifier" << std::endl;
+    // Debug output removed for clean inference
     return true;
 }
 
@@ -1163,7 +1158,7 @@ void EtinyNetEvaluator::calculate_layer_dimensions() {
         }
     }
     
-    std::cout << "Layer dimensions calculated for " << input_size_ << "x" << input_size_ << " input" << std::endl;
+    // Debug output removed for clean inference
     
     // Suppress unused variable warning
     (void)current_c;
@@ -1184,8 +1179,7 @@ void EtinyNetEvaluator::allocate_working_buffers() {
     // Allocate final output buffer
     final_output_.resize(num_classes_);
     
-    std::cout << "Allocated working buffers: max intermediate size = " 
-              << max_buffer_size << " elements" << std::endl;
+    // Debug output removed for clean inference
 }
 
 void EtinyNetEvaluator::evaluate(const float* image_data, float* output, int image_h, int image_w) const {

@@ -115,7 +115,17 @@ def evaluate_compiled_model(
     model_path = Path(tempfile.mktemp(suffix=f".{model_type}"))
 
     try:
-        serialize_model(model, model_path)
+        # Use appropriate serialization function based on model type
+        if model_type == "nnue":
+            from serialize import serialize_model
+
+            serialize_model(model, model_path)
+        elif model_type == "etinynet":
+            from serialize import serialize_etinynet_model
+
+            serialize_etinynet_model(model, model_path)
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
 
         # Evaluate a subset of the dataset for speed
         all_outputs = []
@@ -195,12 +205,40 @@ def evaluate_compiled_model(
                                     "C++ NNUE engine returned empty output"
                                 )
                         else:
-                            raise RuntimeError(
-                                f"C++ NNUE engine failed with return code {result.returncode}. Stderr: {result.stderr}"
+                            # Enhanced error reporting for debugging
+                            error_details = f"C++ NNUE engine failed with return code {result.returncode}"
+                            if result.stderr:
+                                error_details += f"\nStderr: {result.stderr}"
+                            if result.stdout:
+                                error_details += f"\nStdout: {result.stdout}"
+
+                            # Add command details for debugging
+                            error_details += f"\nCommand: {' '.join(cpp_args)}"
+                            error_details += f"\nModel path: {model_path}"
+                            error_details += f"\nImage path: {img_path}"
+                            error_details += (
+                                f"\nModel path exists: {model_path.exists()}"
                             )
+                            error_details += f"\nImage path exists: {img_path.exists()}"
+
+                            # Check file sizes
+                            if model_path.exists():
+                                error_details += f"\nModel file size: {model_path.stat().st_size} bytes"
+                            if img_path.exists():
+                                error_details += f"\nImage file size: {img_path.stat().st_size} bytes"
+
+                            raise RuntimeError(error_details)
                     finally:
                         if img_path.exists():
                             img_path.unlink()
+
+                # Add targets for the samples we processed
+                for i in range(processed_samples):
+                    target = labels[i]
+                    # Ensure target is a tensor, not a scalar
+                    if target.dim() == 0:
+                        target = target.unsqueeze(0)
+                    all_targets.append(target)
 
                 sample_count += processed_samples
 
@@ -256,9 +294,8 @@ def evaluate_compiled_model(
                             img_path.unlink()
 
                     # Add targets for the samples we processed
-                    actual_labels = labels[:batch_size]
                     for i in range(processed_samples):
-                        target = actual_labels[i]
+                        target = labels[i]
                         # Ensure target is a tensor, not a scalar
                         if target.dim() == 0:
                             target = target.unsqueeze(0)
@@ -266,12 +303,8 @@ def evaluate_compiled_model(
                     sample_count += processed_samples
 
             # Add targets for the samples we processed (do this once per batch)
-            batch_labels = labels[:processed_samples]
-            for i in range(processed_samples):
-                target = batch_labels[i]
-                if target.dim() == 0:
-                    target = target.unsqueeze(0)
-                all_targets.append(target)
+            # Note: This was causing duplicate target collection for NNUE models
+            # Targets are now collected within each model type block
 
         if all_outputs and len(all_outputs) > 0:
             try:

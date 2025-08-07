@@ -77,10 +77,38 @@ def compile_cpp_engine(model_type: str) -> bool:
 
         if executable.exists():
             early_log(f"✅ C++ engine compiled successfully: {executable}")
-            return True
+            # Test if executable is actually runnable
+            try:
+                result = subprocess.run(
+                    [str(executable), "--help"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode in [0, 1]:  # 0 = success, 1 = help printed
+                    early_log(f"✅ C++ engine is runnable")
+                    return True
+                else:
+                    error_msg = f"C++ engine executable exists but is not runnable (return code: {result.returncode})"
+                    early_log(f"❌ {error_msg}")
+                    raise RuntimeError(error_msg)
+            except subprocess.TimeoutExpired:
+                early_log(
+                    f"✅ C++ engine is runnable (help command timed out, which is expected)"
+                )
+                return True
+            except Exception as e:
+                error_msg = f"C++ engine executable exists but failed to run: {e}"
+                early_log(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
         else:
             error_msg = f"Expected executable not found: {executable}"
             early_log(f"❌ {error_msg}")
+            early_log(f"   Current directory: {Path.cwd()}")
+            early_log(f"   Engine directory exists: {engine_dir.exists()}")
+            early_log(f"   Build directory exists: {build_dir.exists()}")
+            if build_dir.exists():
+                early_log(f"   Build directory contents: {list(build_dir.glob('*'))}")
             raise RuntimeError(error_msg)
 
     except subprocess.TimeoutExpired as e:
@@ -108,10 +136,14 @@ def test_cpp_engine_inference(model: torch.nn.Module, model_type: str) -> bool:
             use_augmentation=False,
         )
 
-        # Run a quick compiled evaluation
+        # Run a quick compiled evaluation with detailed error handling
+        import traceback
+
         from evaluate import evaluate_compiled_model
 
+        early_log("   Running compiled evaluation...")
         compiled_metrics = evaluate_compiled_model(model, test_loader, model_type)
+        early_log("   Compiled evaluation completed successfully")
 
         early_log(f"✅ C++ engine test successful!")
         early_log(
@@ -125,6 +157,8 @@ def test_cpp_engine_inference(model: torch.nn.Module, model_type: str) -> bool:
     except Exception as e:
         error_msg = f"C++ engine test failed: {e}"
         early_log(f"❌ {error_msg}")
+        early_log(f"   Full traceback:")
+        early_log(f"   {traceback.format_exc()}")
         raise  # Re-raise the original exception with full details
 
 
