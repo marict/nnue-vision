@@ -22,43 +22,25 @@ bool ConvLayer::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&kernel_h), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&kernel_w), sizeof(uint32_t));
     
-    if (in_channels != 3) {
-        std::cerr << "Invalid conv input channels: " << in_channels << " (expected 3)" << std::endl;
-        return false;
-    }
+    if (in_channels != 3) { return false; }
     
-    if (kernel_h != 3 || kernel_w != 3) {
-        std::cerr << "Invalid conv kernel size: " << kernel_h << "x" << kernel_w << " (expected 3x3)" << std::endl;
-        return false;
-    }
+    if (kernel_h != 3 || kernel_w != 3) { return false; }
     
     // Read weights (int8_t)
     long long weight_count = static_cast<long long>(out_channels) * in_channels * kernel_h * kernel_w;
-    if (out_channels <= 0 || in_channels != 3 || kernel_h != 3 || kernel_w != 3 || weight_count <= 0) {
-        std::cerr << "Invalid conv dimensions while loading weights" << std::endl;
-        return false;
-    }
+    if (out_channels <= 0 || in_channels != 3 || kernel_h != 3 || kernel_w != 3 || weight_count <= 0) { return false; }
     weights.resize(static_cast<size_t>(weight_count));
     file.read(reinterpret_cast<char*>(weights.data()), static_cast<std::streamsize>(weight_count));
-    if (!file.good()) {
-        std::cerr << "Failed to read conv weights" << std::endl;
-        return false;
-    }
+    if (!file.good()) { return false; }
     
     // Read bias dimensions and data
     uint32_t bias_count;
     file.read(reinterpret_cast<char*>(&bias_count), sizeof(uint32_t));
-    if (bias_count != static_cast<uint32_t>(out_channels)) {
-        std::cerr << "Conv bias count mismatch" << std::endl;
-        return false;
-    }
+    if (bias_count != static_cast<uint32_t>(out_channels)) { return false; }
     
     biases.resize(bias_count);
     file.read(reinterpret_cast<char*>(biases.data()), bias_count * sizeof(int32_t));
-    if (!file.good()) {
-        std::cerr << "Failed to read conv biases" << std::endl;
-        return false;
-    }
+    if (!file.good()) { return false; }
     
     return true;
 }
@@ -186,31 +168,19 @@ bool FeatureTransformer::load_from_stream(std::ifstream& file) {
     
     // Read weights
     long long weight_count = static_cast<long long>(num_features) * output_size;
-    if (num_features <= 0 || output_size <= 0 || weight_count <= 0) {
-        std::cerr << "Invalid FT dimensions" << std::endl;
-        return false;
-    }
+    if (num_features <= 0 || output_size <= 0 || weight_count <= 0) { return false; }
     weights.resize(static_cast<size_t>(weight_count));
     file.read(reinterpret_cast<char*>(weights.data()), static_cast<std::streamsize>(weight_count * sizeof(int16_t)));
-    if (!file.good()) {
-        std::cerr << "Failed to read FT weights" << std::endl;
-        return false;
-    }
+    if (!file.good()) { return false; }
     
     // Read bias dimensions and data
     uint32_t bias_count;
     file.read(reinterpret_cast<char*>(&bias_count), sizeof(uint32_t));
-    if (bias_count != static_cast<uint32_t>(output_size)) {
-        std::cerr << "FT bias count mismatch" << std::endl;
-        return false;
-    }
+    if (bias_count != static_cast<uint32_t>(output_size)) { return false; }
     
     biases.resize(bias_count);
     file.read(reinterpret_cast<char*>(biases.data()), bias_count * sizeof(int32_t));
-    if (!file.good()) {
-        std::cerr << "Failed to read FT biases" << std::endl;
-        return false;
-    }
+    if (!file.good()) { return false; }
     
     return true;
 }
@@ -319,10 +289,7 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     uint32_t l1_out_size, l1_in_size;
     file.read(reinterpret_cast<char*>(&l1_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l1_in_size), sizeof(uint32_t));
-    if (!file.good() || l1_out_size < 1 || l1_in_size < 1) {
-        std::cerr << "Invalid L1 sizes" << std::endl;
-        return false;
-    }
+    if (!file.good() || l1_out_size < 1 || l1_in_size < 1) { return false; }
     
     l1_size = static_cast<int>(l1_in_size);
     l2_size = static_cast<int>(l1_out_size) - 1;
@@ -335,49 +302,40 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
         long long count = static_cast<long long>(l1_out_size) * l1_in_size;
         l1_weights.resize(static_cast<size_t>(count));
         file.read(reinterpret_cast<char*>(l1_weights.data()), static_cast<std::streamsize>(count));
-        if (!file.good()) { std::cerr << "Failed to read L1 weights" << std::endl; return false; }
+        if (!file.good()) { return false; }
     }
     
     uint32_t l1_bias_count;
     file.read(reinterpret_cast<char*>(&l1_bias_count), sizeof(uint32_t));
     l1_biases.resize(l1_bias_count);
     file.read(reinterpret_cast<char*>(l1_biases.data()), l1_bias_count * sizeof(int32_t));
-    if (!file.good()) { std::cerr << "Failed to read L1 biases" << std::endl; return false; }
+    if (!file.good()) { return false; }
     
     uint32_t l1_fact_out_size, l1_fact_in_size;
     file.read(reinterpret_cast<char*>(&l1_fact_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l1_fact_in_size), sizeof(uint32_t));
     
-    if (l1_fact_in_size != static_cast<uint32_t>(l1_size)) {
-        std::cerr << "Invalid L1 factorization layer input size: " << l1_fact_in_size << " != " << l1_size << std::endl;
-        return false;
-    }
-    if (l1_fact_out_size <= static_cast<uint32_t>(l2_size)) {
-        std::cerr << "L1 factorization output too small: " << l1_fact_out_size << " <= L2 size " << l2_size << std::endl;
-        return false;
-    }
+    if (l1_fact_in_size != static_cast<uint32_t>(l1_size)) { return false; }
+    if (l1_fact_out_size <= static_cast<uint32_t>(l2_size)) { return false; }
     
     {
         long long count = static_cast<long long>(l1_fact_out_size) * l1_fact_in_size;
         l1_fact_weights.resize(static_cast<size_t>(count));
         file.read(reinterpret_cast<char*>(l1_fact_weights.data()), static_cast<std::streamsize>(count));
-        if (!file.good()) { std::cerr << "Failed to read L1 factorization weights" << std::endl; return false; }
+        if (!file.good()) { return false; }
     }
     
     uint32_t l1_fact_bias_count;
     file.read(reinterpret_cast<char*>(&l1_fact_bias_count), sizeof(uint32_t));
     l1_fact_biases.resize(l1_fact_bias_count);
     file.read(reinterpret_cast<char*>(l1_fact_biases.data()), l1_fact_bias_count * sizeof(int32_t));
-    if (!file.good()) { std::cerr << "Failed to read L1 factorization biases" << std::endl; return false; }
+    if (!file.good()) { return false; }
     
     uint32_t l2_out_size, l2_in_size;
     file.read(reinterpret_cast<char*>(&l2_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&l2_in_size), sizeof(uint32_t));
     
-    if (l2_in_size != static_cast<uint32_t>(l2_size * 2)) {
-        std::cerr << "Invalid L2 layer dimensions: " << l2_in_size << " -> " << l2_out_size << std::endl;
-        return false;
-    }
+    if (l2_in_size != static_cast<uint32_t>(l2_size * 2)) { return false; }
     
     l3_size = l2_out_size;
     
@@ -385,14 +343,14 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
         long long count = static_cast<long long>(l2_out_size) * l2_in_size;
         l2_weights.resize(static_cast<size_t>(count));
         file.read(reinterpret_cast<char*>(l2_weights.data()), static_cast<std::streamsize>(count));
-        if (!file.good()) { std::cerr << "Failed to read L2 weights" << std::endl; return false; }
+        if (!file.good()) { return false; }
     }
     
     uint32_t l2_bias_count;
     file.read(reinterpret_cast<char*>(&l2_bias_count), sizeof(uint32_t));
     l2_biases.resize(l2_bias_count);
     file.read(reinterpret_cast<char*>(l2_biases.data()), l2_bias_count * sizeof(int32_t));
-    if (!file.good()) { std::cerr << "Failed to read L2 biases" << std::endl; return false; }
+    if (!file.good()) { return false; }
     
     // Read output layer
     uint32_t out_out_size, out_in_size;

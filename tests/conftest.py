@@ -14,21 +14,18 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-# Ignore GPU‐available warnings when CPU fallback is used (common on CI/M1)
 warnings.filterwarnings(
     "ignore",
     message=r"GPU available .+ not used",
     category=UserWarning,
 )
 
-# Ignore Lightning suggestion about DataLoader workers
 warnings.filterwarnings(
     "ignore",
     message=r"The '(val_|train_|test_)?dataloader' does not have many workers",
     category=UserWarning,
 )
 
-# Ignore GraphQL ByteString deprecation warnings (external library issue)
 warnings.filterwarnings(
     "ignore",
     message=r"'typing\.ByteString' is deprecated",
@@ -36,14 +33,12 @@ warnings.filterwarnings(
     module="graphql",
 )
 
-# Ignore checkpoint directory already exists notice
 warnings.filterwarnings(
     "ignore",
     message=r"Checkpoint directory .+ exists and is not empty",
     category=UserWarning,
 )
 
-# Ignore small batch vs logging interval info
 warnings.filterwarnings(
     "ignore",
     message=r"The number of training batches \(\d+\) is smaller than the logging interval",

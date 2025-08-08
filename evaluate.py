@@ -197,18 +197,9 @@ def evaluate_compiled_model(
                                             f"Failed to parse NNUE CSV logits: {e}. Output: {lines[0]}"
                                         )
                                 else:
-                                    # Fallback for very old format: single value (treat as class-0 logit)
-                                    try:
-                                        cpp_output = float(lines[0])
-                                        all_outputs.append(
-                                            torch.tensor(
-                                                [[cpp_output]], dtype=torch.float32
-                                            )
-                                        )
-                                    except ValueError as e:
-                                        raise RuntimeError(
-                                            f"Failed to parse legacy NNUE output: {e}. Output: {lines[0]}"
-                                        )
+                                    raise RuntimeError(
+                                        f"Malformed NNUE output: expected CSV logits and density. Raw: {lines[0]}"
+                                    )
                             else:
                                 raise RuntimeError(
                                     "C++ NNUE engine returned empty output"
@@ -416,7 +407,7 @@ def evaluate_model_comprehensive(
     model_type: str,
     device: Optional[torch.device] = None,
     include_compiled: bool = True,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """Comprehensive model evaluation including both PyTorch and compiled metrics."""
     results = {}
 
@@ -440,57 +431,4 @@ def evaluate_model_comprehensive(
     return results
 
 
-def compiled_parity_check(
-    model: torch.nn.Module,
-    loader: torch.utils.data.DataLoader,
-    device: Optional[torch.device],
-    model_type: str,
-    max_samples: int = 16,
-) -> Dict[str, float]:
-    """Compare PyTorch vs compiled logits on a small sample for parity diagnostics.
-
-    Returns:
-        { 'top1_agreement': float, 'median_cosine': float }
-    """
-    import numpy as np
-
-    model.eval()
-    torch_logits_list = []
-    compiled_logits_list = []
-
-    # Take a small slice for speed
-    processed = 0
-    for images, labels in loader:
-        if processed >= max_samples:
-            break
-        batch = min(images.shape[0], max_samples - processed)
-        images = images[:batch].to(device)
-        labels = labels[:batch].to(device)
-
-        with torch.no_grad():
-            t_logits = model(images).detach().cpu().numpy()
-        torch_logits_list.append(t_logits)
-
-        # Run compiled inference via existing function on just this mini-batch
-        # Reuse evaluate_compiled_model parsing path by constructing a mini loader
-        mini_loader = [(images.cpu(), labels.cpu())]
-        metrics = evaluate_compiled_model(model, mini_loader, model_type)
-        # We smuggled logits via global state? No: rebuild by re-running inner loop for this batch
-        # Simpler: compute per-sample compiled logits inline to avoid refactor
-        compiled_batch = []
-        for i in range(batch):
-            img = images[i].cpu().numpy()
-            # Serialize model once per batch
-
-        # Fallback: if evaluate_compiled_model produced acc/f1 only, return empty diagnostics
-        processed += batch
-        break
-
-    # If we couldn't compute compiled batch logits here, skip diagnostics gracefully
-    try:
-        torch_logits = np.concatenate(torch_logits_list, axis=0)
-        compiled_logits = None  # Placeholder to avoid crash if not implemented
-        if compiled_logits is None:
-            return {"top1_agreement": 0.0, "median_cosine": 0.0}
-    except Exception:
-        return {"top1_agreement": 0.0, "median_cosine": 0.0}
+## REMB: removed unused compiled_parity_check helper; parity is covered by tests

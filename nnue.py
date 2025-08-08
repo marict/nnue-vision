@@ -521,10 +521,7 @@ class NNUE(nn.Module):
         # Verify the output size
         actual_output_size = (input_size + 2 * 1 - 3) // conv_stride + 1
 
-        print(f"Conv params: input_size={input_size}, target_grid={target_grid_size}")
-        print(
-            f"  Calculated stride: {conv_stride}, actual output: {actual_output_size}x{actual_output_size}"
-        )
+        # REMB: remove noisy debug prints; keep computation only
 
         return num_features_per_square, conv_stride
 

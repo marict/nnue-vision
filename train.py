@@ -28,7 +28,6 @@ from training_utils import (
 
 
 def compile_cpp_engine(model_type: str) -> bool:
-    """Compile C++ engine for the specified model type."""
     early_log(f"🔨 Compiling C++ engine for {model_type}...")
 
     engine_dir = Path("engine")
@@ -38,7 +37,6 @@ def compile_cpp_engine(model_type: str) -> bool:
     build_dir.mkdir(exist_ok=True)
 
     try:
-        # Run cmake
         early_log("  Running cmake...")
         cmake_result = subprocess.run(
             ["cmake", ".."],
@@ -53,7 +51,6 @@ def compile_cpp_engine(model_type: str) -> bool:
             early_log(f"❌ {error_msg}")
             raise RuntimeError(error_msg)
 
-        # Run make
         early_log("  Running make...")
         make_result = subprocess.run(
             ["make", "-j4"],
@@ -68,7 +65,6 @@ def compile_cpp_engine(model_type: str) -> bool:
             early_log(f"❌ {error_msg}")
             raise RuntimeError(error_msg)
 
-        # Check if the expected executables were built
         if model_type == "nnue":
             executable = build_dir / "nnue_inference"
         elif model_type == "etinynet":
@@ -80,7 +76,6 @@ def compile_cpp_engine(model_type: str) -> bool:
 
         if executable.exists():
             early_log(f"✅ C++ engine compiled successfully: {executable}")
-            # Test if executable is actually runnable
             try:
                 result = subprocess.run(
                     [str(executable), "--help"],
@@ -88,17 +83,15 @@ def compile_cpp_engine(model_type: str) -> bool:
                     text=True,
                     timeout=5,
                 )
-                if result.returncode in [0, 1]:  # 0 = success, 1 = help printed
+                if result.returncode in [0, 1]:
                     early_log(f"✅ C++ engine is runnable")
                     return True
                 else:
-                    error_msg = f"C++ engine executable exists but is not runnable (return code: {result.returncode})"
+                    error_msg = f"C++ engine executable exists but is not runnable (rc={result.returncode})"
                     early_log(f"❌ {error_msg}")
                     raise RuntimeError(error_msg)
             except subprocess.TimeoutExpired:
-                early_log(
-                    f"✅ C++ engine is runnable (help command timed out, which is expected)"
-                )
+                early_log("✅ C++ engine is runnable (help timed out)")
                 return True
             except Exception as e:
                 error_msg = f"C++ engine executable exists but failed to run: {e}"
@@ -107,9 +100,6 @@ def compile_cpp_engine(model_type: str) -> bool:
         else:
             error_msg = f"Expected executable not found: {executable}"
             early_log(f"❌ {error_msg}")
-            early_log(f"   Current directory: {Path.cwd()}")
-            early_log(f"   Engine directory exists: {engine_dir.exists()}")
-            early_log(f"   Build directory exists: {build_dir.exists()}")
             if build_dir.exists():
                 early_log(f"   Build directory contents: {list(build_dir.glob('*'))}")
             raise RuntimeError(error_msg)

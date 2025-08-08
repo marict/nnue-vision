@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
 """
-Run MCU Benchmarks for NNUE-Vision
-
-This script demonstrates how to run comprehensive MCU benchmarks including:
-- MCU simulation with various platforms
-- TinyML benchmark generation
-- Comparison with published baselines
-- NNUE-specific incremental update analysis
-- Report generation with plots
+Run MCU Benchmarks for NNUE-Vision (JSON summary + optional plots).
 
 Usage:
     python scripts/run_mcu_benchmarks.py --model checkpoints/model.pt --dataset cifar10
-    python scripts/run_mcu_benchmarks.py --help
 """
 
 import argparse
@@ -20,8 +12,6 @@ import sys
 from pathlib import Path
 from typing import Dict, Tuple
 
-import matplotlib.pyplot as plt
-import seaborn as sns
 import torch
 from torch.utils.data import DataLoader
 
@@ -105,6 +95,11 @@ def parse_arguments():
         help="Configure dataset for Visual Wake Words style evaluation",
     )
 
+    parser.add_argument(
+        "--plots",
+        action="store_true",
+        help="Generate plots (requires matplotlib & seaborn)",
+    )
     return parser.parse_args()
 
 
@@ -181,42 +176,27 @@ def load_model(model_path: Path, device: torch.device) -> NNUE:
 
 
 def generate_benchmark_plots(benchmark_results: Dict, output_dir: Path) -> None:
-    """Generate visualization plots for benchmark results."""
     try:
-        # Set style
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except Exception:
+        print("⚠️  Plotting libs not available, skipping plot generation")
+        return
+    try:
         plt.style.use("seaborn-v0_8")
         sns.set_palette("husl")
-
-        # Create plots directory
         plots_dir = output_dir / "plots"
         plots_dir.mkdir(exist_ok=True)
-
-        # 1. Accuracy vs Model Size Pareto Plot
         from benchmarks.tinyml_benchmarks import create_pareto_plot_data
 
         pareto_data = create_pareto_plot_data(
             benchmark_results, x_metric="model_size_kb", y_metric="accuracy"
         )
-
         plt.figure(figsize=(10, 6))
-
-        # Plot NNUE models
         if pareto_data["nnue_models"]:
             nnue_x = [m["x"] for m in pareto_data["nnue_models"]]
             nnue_y = [m["y"] for m in pareto_data["nnue_models"]]
             plt.scatter(nnue_x, nnue_y, c="red", s=100, label="NNUE-Vision", marker="o")
-
-            # Add labels for NNUE points
-            for model in pareto_data["nnue_models"]:
-                plt.annotate(
-                    model["platform"],
-                    (model["x"], model["y"]),
-                    xytext=(5, 5),
-                    textcoords="offset points",
-                    fontsize=8,
-                )
-
-        # Plot baseline models
         if pareto_data["baseline_models"]:
             baseline_x = [m["x"] for m in pareto_data["baseline_models"]]
             baseline_y = [m["y"] for m in pareto_data["baseline_models"]]
@@ -228,17 +208,6 @@ def generate_benchmark_plots(benchmark_results: Dict, output_dir: Path) -> None:
                 label="Published Baselines",
                 marker="s",
             )
-
-            # Add labels for baseline points
-            for model in pareto_data["baseline_models"]:
-                plt.annotate(
-                    model["name"],
-                    (model["x"], model["y"]),
-                    xytext=(5, 5),
-                    textcoords="offset points",
-                    fontsize=8,
-                )
-
         plt.xlabel("Model Size (KB)")
         plt.ylabel("Accuracy")
         plt.title("Accuracy vs Model Size - TinyML Comparison")
@@ -249,62 +218,7 @@ def generate_benchmark_plots(benchmark_results: Dict, output_dir: Path) -> None:
             plots_dir / "accuracy_vs_model_size.png", dpi=150, bbox_inches="tight"
         )
         plt.close()
-
-        # 2. Performance across MCU platforms
-        plt.figure(figsize=(12, 8))
-
-        platforms = list(benchmark_results["mlperf_results"].keys())
-        metrics = ["latency_ms", "energy_uj", "throughput_fps"]
-
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        axes = axes.flatten()
-
-        # Latency plot
-        latencies = [
-            benchmark_results["mlperf_results"][p]["latency_ms"] for p in platforms
-        ]
-        axes[0].bar(platforms, latencies, color="skyblue")
-        axes[0].set_title("Latency (ms)")
-        axes[0].set_ylabel("Milliseconds")
-
-        # Energy plot
-        energies = [
-            benchmark_results["mlperf_results"][p]["energy_uj"] for p in platforms
-        ]
-        axes[1].bar(platforms, energies, color="lightgreen")
-        axes[1].set_title("Energy per Inference (μJ)")
-        axes[1].set_ylabel("Microjoules")
-
-        # Throughput plot
-        throughputs = [
-            benchmark_results["mlperf_results"][p]["throughput_fps"] for p in platforms
-        ]
-        axes[2].bar(platforms, throughputs, color="orange")
-        axes[2].set_title("Throughput (FPS)")
-        axes[2].set_ylabel("Frames per Second")
-
-        # Memory usage plot
-        memory_usage = [
-            benchmark_results["mlperf_results"][p]["memory_peak_kb"] for p in platforms
-        ]
-        axes[3].bar(platforms, memory_usage, color="pink")
-        axes[3].set_title("Peak Memory Usage (KB)")
-        axes[3].set_ylabel("Kilobytes")
-
-        for ax in axes:
-            ax.tick_params(axis="x", rotation=45)
-            ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.savefig(
-            plots_dir / "mcu_performance_comparison.png", dpi=150, bbox_inches="tight"
-        )
-        plt.close()
-
         print(f"📊 Plots saved to {plots_dir}")
-
-    except ImportError:
-        print("⚠️  Matplotlib not available, skipping plot generation")
     except Exception as e:
         print(f"⚠️  Error generating plots: {e}")
 
@@ -386,8 +300,8 @@ def main():
     for advantage in summary["key_advantages"]:
         print(f"   • {advantage}")
 
-    # Generate plots
-    generate_benchmark_plots(tinyml_results, args.output_dir)
+    if args.plots:
+        generate_benchmark_plots(tinyml_results, args.output_dir)
 
     # Save MCU simulation results separately
     mcu_results_path = args.output_dir / f"mcu_simulation_{actual_dataset_name}.json"
@@ -398,7 +312,8 @@ def main():
     print(f"\n💾 Results saved:")
     print(f"   TinyML Report: {report_path}")
     print(f"   MCU Simulation: {mcu_results_path}")
-    print(f"   Plots: {args.output_dir / 'plots'}")
+    if args.plots:
+        print(f"   Plots: {args.output_dir / 'plots'}")
 
     print(f"\n✅ MCU benchmark analysis complete!")
 

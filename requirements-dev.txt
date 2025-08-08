@@ -2,17 +2,13 @@
 
 # Core production dependencies
 numpy<2
-matplotlib
-numba
 requests
 pillow
 wandb
-seaborn
 albumentations
 opencv-python-headless
 scikit-learn>=1.0.0
 torchvision
-tensorflow
 
 # RunPod cloud training dependencies
 runpod

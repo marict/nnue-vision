@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Compare C++ engine runtime speed between NNUE and EtinyNet models.
-
-This script automates the following steps:
-
-1. Creates small NNUE & EtinyNet PyTorch models (sized for quick benchmarking).
-2. Serialises them to binary formats (.nnue / .etiny) via serialize.py.
-3. Builds the C++ engine (Release mode) as well as benchmark executables
-   (benchmark_engine for NNUE and benchmark_etinynet_engine for EtinyNet).
-4. Executes both benchmarks, parses their outputs and prints a speed comparison.
-
-Run:
-    python scripts/compare_engine_speed.py
-
-Notes:
-- The script assumes a Unix-like environment with CMake & a C++17 compiler.
-- For repeatability it uses fixed random seeds.
-"""
+"""Compare NNUE vs EtinyNet C++ runtime on CIFAR-10 using untrained models."""
 from __future__ import annotations
 
 import re
@@ -40,7 +24,6 @@ from serialize import serialize_etinynet_model, serialize_model
 def run(
     cmd: list[str] | str, cwd: Path | None = None, check: bool = True
 ) -> subprocess.CompletedProcess:
-    """Thin wrapper around subprocess.run printing the command."""
     if isinstance(cmd, list):
         printable = " ".join(cmd)
     else:
@@ -51,7 +34,6 @@ def run(
 
 
 def ensure_engine_built(build_dir: Path) -> None:
-    """Configure & build the C++ engine in *Release* mode (only once)."""
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # Configure step (run only if cache is absent)
@@ -60,7 +42,7 @@ def ensure_engine_built(build_dir: Path) -> None:
         engine_src_dir = build_dir.parent.parent  # engine/build/build_bench -> engine
         run(["cmake", "-DCMAKE_BUILD_TYPE=Release", str(engine_src_dir)], cwd=build_dir)
 
-    # Build static library and NNUE benchmark + inference executables
+    # Build static library and executables
     run(
         [
             "cmake",
@@ -139,7 +121,7 @@ def run_cifar10_exec_benchmark(
     build_dir: Path,
     num_samples: int = 200,
 ) -> None:
-    """Measure ms/sample on CIFAR-10 for untrained NNUE vs EtinyNet using C++ inference executables."""
+    """Measure ms/sample on CIFAR-10 for untrained NNUE vs EtinyNet."""
     print("\n📦 CIFAR-10 Performance Benchmark (untrained models)")
     print("=" * 55)
 

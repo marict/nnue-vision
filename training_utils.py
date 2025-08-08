@@ -68,9 +68,7 @@ def replay_early_logs_to_wandb() -> None:
     _early_log_capture.replay_to_wandb()
 
 
-# --------------------------------------------------------------------------- #
 # Git utilities for debugging and tracking
-# --------------------------------------------------------------------------- #
 
 
 def get_git_info() -> dict[str, str]:
@@ -144,9 +142,7 @@ def log_git_commit_info() -> None:
         early_log("❌ Git information not available")
 
 
-# --------------------------------------------------------------------------- #
 # Disk space monitoring utilities
-# --------------------------------------------------------------------------- #
 
 
 def get_disk_usage_percent() -> float:
@@ -201,9 +197,7 @@ def cleanup_disk_space_emergency() -> None:
         raise e
 
 
-# --------------------------------------------------------------------------- #
 # Configuration utilities
-# --------------------------------------------------------------------------- #
 
 
 def generate_run_name(

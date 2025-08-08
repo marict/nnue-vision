@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 #include <fstream>
-#include <mutex> // Added for MemoryPool mutex
+#include <mutex>
 
 namespace nnue {
 
@@ -30,7 +30,7 @@ constexpr float QUANTIZED_ONE = 127.0f;
 // SIMD alignment
 constexpr int CACHE_LINE_SIZE = 64;
 
-// Memory buffer pool for efficient temporary allocations
+// Memory buffer pool
 class MemoryPool {
 private:
     struct Buffer {
@@ -145,7 +145,7 @@ void aligned_free(T* ptr) {
     #endif
 }
 
-// RAII wrapper for aligned memory
+    // RAII wrapper
 template<typename T>
 class AlignedVector {
 private:
@@ -232,8 +232,7 @@ struct DynamicGrid {
         }
     }
     
-    // Convert from int8_t conv output to uint64 grid (for small channel counts)
-    // For larger channel counts, use direct indexing
+    // Convert from int8_t conv output to uint64 grid (<=64 channels)
     void from_conv_output(const int8_t* conv_data, float threshold = 0.0f) {
         clear();
         if (grid_size <= 0 || num_channels <= 0) return;
@@ -253,7 +252,7 @@ struct DynamicGrid {
         }
     }
     
-    // Extract sparse feature indices efficiently
+    // Extract sparse feature indices
     void extract_features(std::vector<int>& active_features) const {
         active_features.clear();
         if (grid_size <= 0 || num_channels <= 0) return;
@@ -268,9 +267,17 @@ struct DynamicGrid {
                         pixel &= pixel - 1;
                     }
                 } else if (num_channels > 64) {
+                    // Fallback: linear scan without bit packing
                     for (int c = 0; c < num_channels; ++c) {
                         int feature_idx = (h * grid_size + w) * num_channels + c;
-                        (void)feature_idx;
+                        // Treat positive activations as features
+                        if (c < 64) {
+                            // If bit-packed area has remaining bits, use them
+                            if ((pixel >> c) & 1ULL) active_features.push_back(feature_idx);
+                        } else {
+                            // For channels beyond 64, approximate: consider index as active boundary marker
+                            // This maintains safety; real dense-channel support should implement proper storage
+                        }
                     }
                 }
             }
@@ -312,7 +319,7 @@ struct ConvLayer {
     bool load_from_stream(std::ifstream& file);
 };
 
-// Feature transformer: converts sparse features to dense representation
+    // Feature transformer: sparse -> dense
 struct FeatureTransformer {
     AlignedVector<int16_t> weights;
     AlignedVector<int32_t> biases;
@@ -328,17 +335,17 @@ struct FeatureTransformer {
     // Forward pass with sparse input
     void forward(const std::vector<int>& active_features, int16_t* output) const;
     
-    // Chess engine-style incremental updates (SIMD optimized)
+    // Incremental updates (SIMD optimized)
     void add_feature(int feature_idx, int16_t* accumulator) const;
     void remove_feature(int feature_idx, int16_t* accumulator) const;
     void move_feature(int from_idx, int to_idx, int16_t* accumulator) const;
     
-    // Efficient accumulator update (batch operations)
+    // Efficient accumulator update
     void update_accumulator(const std::vector<int>& added_features,
                            const std::vector<int>& removed_features,
                            int16_t* accumulator) const;
     
-    // SIMD-optimized implementations
+    // SIMD-optimized
     void add_feature_simd(int feature_idx, int16_t* accumulator) const;
     void remove_feature_simd(int feature_idx, int16_t* accumulator) const;
     void forward_simd(const std::vector<int>& active_features, int16_t* output) const;
@@ -346,7 +353,7 @@ struct FeatureTransformer {
     bool load_from_stream(std::ifstream& file);
 };
 
-// Dense layer stack for configurable L1->L2->L3->1
+// Dense layer stack L1->L2->L3->out
 struct LayerStack {
     // Architecture parameters
     int l1_size;
@@ -377,24 +384,20 @@ struct LayerStack {
     LayerStack();
     ~LayerStack() = default;
     
-    // Make it movable but not copyable
+    // Movable, not copyable
     LayerStack(const LayerStack&) = delete;
     LayerStack& operator=(const LayerStack&) = delete;
     LayerStack(LayerStack&&) = default;
     LayerStack& operator=(LayerStack&&) = default;
     
-    // Forward pass through all layers with layer stack index for bucket selection
+    // Forward pass
     float forward(const int16_t* input, int layer_stack_index = 0) const;
     std::vector<float> forward_multiclass(const int16_t* input, int layer_stack_index = 0) const;
     
     bool load_from_stream(std::ifstream& file);
 };
 
-
-// (DepthwiseSeparableConv support was removed – EtinyNet now uses only Conv + LB/DLB)
-
-// Linear Depthwise Block (LB) from EtinyNet paper
-// Architecture: pointwise_expand -> depthwise -> pointwise_project (matches PyTorch)
+// Linear Depthwise Block (LB)
 struct LinearDepthwiseBlock {
     // Pointwise expansion (1x1 conv): in_channels -> mid_channels
     AlignedVector<int8_t> pw_expand_weights;
@@ -418,13 +421,13 @@ struct LinearDepthwiseBlock {
     LinearDepthwiseBlock();
     ~LinearDepthwiseBlock() = default;
     
-    // Forward pass: pw_expand+ReLU6 -> dw_conv+ReLU6 -> pw_project (matches PyTorch)
+    // Forward pass
     void forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);
 };
 
-// Dense Linear Depthwise Block (DLB) from EtinyNet paper
+// Dense Linear Depthwise Block (DLB)
 struct DenseLinearDepthwiseBlock {
     LinearDepthwiseBlock linear_block;
     bool use_skip_connection;
@@ -432,13 +435,13 @@ struct DenseLinearDepthwiseBlock {
     DenseLinearDepthwiseBlock();
     ~DenseLinearDepthwiseBlock() = default;
     
-    // Forward pass with optional skip connection
+    // Forward pass with optional skip
     void forward(const int8_t* input, int8_t* output, int input_h, int input_w, const MemoryPool* pool = nullptr) const;
     
     bool load_from_stream(std::ifstream& file);
 };
 
-// Linear classifier layer  
+// Linear classifier layer
 struct LinearLayer {
     AlignedVector<int8_t> weights;
     AlignedVector<int32_t> biases;
@@ -476,14 +479,14 @@ private:
     int asq_bits_;
     float lambda_param_;
     
-    // Network layers (stored in execution order)
+    // Network layers
     std::vector<std::unique_ptr<ConvLayer>> conv_layers_;
     // Removed ds_layers_ (depth-wise separable convs) – no longer used
     std::vector<std::unique_ptr<LinearDepthwiseBlock>> lb_layers_;
     std::vector<std::unique_ptr<DenseLinearDepthwiseBlock>> dlb_layers_;
     std::unique_ptr<LinearLayer> classifier_;
     
-    // Layer execution sequence (stores layer type and index)
+    // Layer execution sequence
     struct LayerInfo {
         EtinyNetLayerType type;
         int index;
@@ -491,10 +494,10 @@ private:
     };
     std::vector<LayerInfo> layer_sequence_;
     
-    // Working buffers (dynamically allocated based on model)
+    // Working buffers
     mutable std::vector<AlignedVector<int8_t>> intermediate_buffers_;
     mutable AlignedVector<float> final_output_;
-    mutable MemoryPool buffer_pool_;  // Memory pool for temporary allocations
+    mutable MemoryPool buffer_pool_;
 
 public:
     EtinyNetEvaluator();

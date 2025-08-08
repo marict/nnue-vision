@@ -22,7 +22,7 @@ log "updating apt repositories"
 find /etc/apt -name "*.list*" -exec grep -l "nvidia\|cuda" {} \; -delete 2>/dev/null || true
 rm -rf /var/lib/apt/lists/* || true
 apt-get update || { log "apt update failed, retrying..."; dpkg --configure -a || true; apt-get update || true; }
-apt-get install -y --no-install-recommends git tree htop build-essential cmake || true
+apt-get install -y --no-install-recommends git build-essential cmake || true
 
 # Set up pip cache in persistent storage for faster subsequent installs
 export PIP_CACHE_DIR="/runpod-volume/pip-cache"
