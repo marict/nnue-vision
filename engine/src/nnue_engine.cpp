@@ -399,13 +399,14 @@ bool LayerStack::load_from_stream(std::ifstream& file) {
     file.read(reinterpret_cast<char*>(&out_out_size), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&out_in_size), sizeof(uint32_t));
     
-    if (out_in_size != static_cast<uint32_t>(l3_size) || out_out_size != 1) {
+    if (out_in_size != static_cast<uint32_t>(l3_size) || out_out_size < 1) {
         std::cerr << "Invalid output layer dimensions: " << out_in_size << " -> " << out_out_size << std::endl;
         return false;
     }
+    out_classes = static_cast<int>(out_out_size);
     
     {
-        long long count = static_cast<long long>(out_out_size) * out_in_size;
+    long long count = static_cast<long long>(out_out_size) * out_in_size;
         output_weights.resize(static_cast<size_t>(count));
         file.read(reinterpret_cast<char*>(output_weights.data()), static_cast<std::streamsize>(count));
         if (!file.good()) { std::cerr << "Failed to read output weights" << std::endl; return false; }
@@ -516,6 +517,52 @@ float LayerStack::forward(const int16_t* input, int layer_stack_index) const {
     float l3c = static_cast<float>(output_acc) / output_scale;
     
     return l3c + l1f_out + l1c_out;
+}
+
+std::vector<float> LayerStack::forward_multiclass(const int16_t* input, int layer_stack_index) const {
+    (void)layer_stack_index;
+    std::vector<float> logits(static_cast<size_t>(std::max(1, out_classes)), 0.0f);
+
+    // L1 combined
+    if (l2_size < 1 || l1_size < 1) {
+        return logits;
+    }
+    std::vector<int8_t> l1_combined_output(static_cast<size_t>(l2_size + 1));
+    simd::dense_forward_scalar(input, l1_weights.data(), l1_biases.data(),
+                               l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
+    float l1c_out = static_cast<float>(l1_combined_output[static_cast<size_t>(l2_size)]) / l1_scale;
+
+    std::vector<int8_t> l1_fact_output(l1_fact_biases.size());
+    simd::dense_forward_scalar(input, l1_fact_weights.data(), l1_fact_biases.data(),
+                               l1_fact_output.data(), l1_size, l1_fact_biases.size(), l1_fact_scale);
+    if (l1_fact_output.size() <= static_cast<size_t>(l2_size)) {
+        return logits;
+    }
+    float l1f_out = static_cast<float>(l1_fact_output[static_cast<size_t>(l2_size)]) / l1_fact_scale;
+
+    std::vector<int16_t> l1_expanded(static_cast<size_t>(l2_size) * 2U);
+    for (int i = 0; i < l2_size; ++i) {
+        int32_t squared = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
+        squared = (squared * 127) / 128;
+        l1_expanded[i] = static_cast<int16_t>(std::max(0, std::min(127, squared)));
+        l1_expanded[i + l2_size] = static_cast<int16_t>(l1_combined_output[i]);
+    }
+
+    std::vector<int8_t> l2_output(l3_size);
+    simd::dense_forward_scalar(l1_expanded.data(), l2_weights.data(), l2_biases.data(),
+                               l2_output.data(), l2_size * 2, l3_size, l2_scale);
+
+    for (int cls = 0; cls < out_classes; ++cls) {
+        int32_t acc = output_biases[cls];
+        for (int j = 0; j < l3_size; ++j) {
+            int idx = cls * l3_size + j;
+            acc += static_cast<int32_t>(l2_output[j]) * static_cast<int32_t>(output_weights[idx]);
+        }
+        float l3c = static_cast<float>(acc) / output_scale;
+        logits[static_cast<size_t>(cls)] = l3c + l1f_out + l1c_out;
+    }
+
+    return logits;
 }
 
 NNUEEvaluator::NNUEEvaluator() : num_features_(0), l1_size_(0), l2_size_(0), l3_size_(0), 
@@ -682,6 +729,38 @@ float NNUEEvaluator::evaluate(const float* image_data, int image_h, int image_w,
     float raw_output = layer_stacks_[layer_stack_index].forward(ft_output_.data(), layer_stack_index);
     
     return raw_output;
+}
+
+std::vector<float> NNUEEvaluator::evaluate_logits(const float* image_data, int image_h, int image_w, int layer_stack_index) const {
+    if (layer_stack_index >= num_ls_buckets_) {
+        layer_stack_index = 0;
+    }
+    if (grid_size_ <= 0) return {};
+
+    int conv_stride;
+    if (grid_size_ > 1) {
+        int num = image_h - 1;
+        int den = grid_size_ - 1;
+        conv_stride = (num + den - 1) / den;
+    } else {
+        conv_stride = std::max(1, image_h);
+    }
+    if (conv_stride < 1) conv_stride = 1;
+
+    std::fill(conv_output_.data(), conv_output_.data() + conv_output_.size(), static_cast<int8_t>(0));
+    conv_layer_.forward(image_data, conv_output_.data(), image_h, image_w, conv_stride);
+
+    feature_grid_->from_conv_output(conv_output_.data(), visual_threshold_);
+    feature_grid_->extract_features(active_features_);
+    feature_transformer_.forward(active_features_, ft_output_.data());
+    for (int i = 0; i < l1_size_; ++i) {
+        ft_output_[i] = std::max(static_cast<int16_t>(0),
+                                 std::min(ft_output_[i], static_cast<int16_t>(quantized_one_)));
+    }
+    if (layer_stack_index < 0 || layer_stack_index >= static_cast<int>(layer_stacks_.size())) {
+        return {};
+    }
+    return layer_stacks_[layer_stack_index].forward_multiclass(ft_output_.data(), layer_stack_index);
 }
 
 // extract_features is now implemented inline in the header

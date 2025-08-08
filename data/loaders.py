@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -17,7 +17,7 @@ def create_data_loaders(
     target_size: Optional[Tuple[int, int]] = None,
     max_samples_per_split: Optional[int] = None,
     subset: float = 1.0,
-    data_root: str = "./data/raw",
+    data_root: Optional[str] = None,
     binary_classification: Optional[dict] = None,
     use_augmentation: bool = True,
     augmentation_strength: str = "medium",
@@ -32,7 +32,9 @@ def create_data_loaders(
         target_size: Target image size (height, width)
         max_samples_per_split: Maximum samples per split (None for all)
         subset: Fraction of dataset to use (0.0 to 1.0)
-        data_root: Root directory for dataset storage
+        data_root: Root directory for dataset storage. If None, auto-detects
+            persistent storage: uses `/runpod-volume/datasets` when available,
+            otherwise falls back to `./data/raw`.
         binary_classification: Dict with 'positive_classes' for binary tasks
 
     Returns:

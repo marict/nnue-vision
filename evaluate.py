@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
+from serialize import serialize_etinynet_model, serialize_model
 
 
 def compute_metrics(outputs: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
@@ -72,13 +75,11 @@ def evaluate_model(
         images, labels = batch
         images = images.to(device)
         labels = labels.to(device)
-        batch = (images, labels)
-
-        loss = loss_fn(model, batch)
+        outputs = model(images)
+        loss = F.cross_entropy(outputs, labels.long())
         total_loss += loss.item()
-        outputs = model(batch[0])
         all_outputs.append(outputs.cpu())
-        all_targets.append(batch[1].cpu())
+        all_targets.append(labels.cpu())
 
     outputs = torch.cat(all_outputs)
     targets = torch.cat(all_targets)
@@ -123,12 +124,8 @@ def evaluate_compiled_model(
     try:
         # Use appropriate serialization function based on model type
         if model_type == "nnue":
-            from serialize import serialize_model
-
             serialize_model(model, model_path)
         elif model_type == "etinynet":
-            from serialize import serialize_etinynet_model
-
             serialize_etinynet_model(model, model_path)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
@@ -136,6 +133,7 @@ def evaluate_compiled_model(
         # Evaluate a subset of the dataset for speed
         all_outputs = []
         all_targets = []
+        densities: list[float] = []
         # Evaluate the entire loader (to match PyTorch eval set exactly)
 
         # Timing measurements
@@ -179,31 +177,38 @@ def evaluate_compiled_model(
                         total_samples_processed += 1
 
                         if result.returncode == 0:
-                            # Parse C++ output (format: result,density)
+                            # Parse C++ output
+                            # Expected new format: comma-separated values with last element = density, preceding = logits
                             lines = result.stdout.strip().split("\n")
                             if lines:
-                                try:
-                                    parts = lines[0].split(",")
-                                    if len(parts) >= 2:
-                                        cpp_output = float(parts[0])
-                                        density = float(parts[1])
-                                        all_outputs.append(torch.tensor([cpp_output]))
-                                        # Store density for later averaging
-                                        if not hasattr(
-                                            evaluate_compiled_model, "densities"
-                                        ):
-                                            evaluate_compiled_model.densities = []
-                                        evaluate_compiled_model.densities.append(
-                                            density
+                                parts = lines[0].split(",")
+                                if len(parts) >= 2:
+                                    try:
+                                        density = float(parts[-1])
+                                        logit_vals = [float(x) for x in parts[:-1]]
+                                        logits_tensor = torch.tensor(
+                                            logit_vals, dtype=torch.float32
                                         )
-                                    else:
-                                        # Fallback for old format (just result)
+                                        # Shape to [1, C]
+                                        all_outputs.append(logits_tensor.unsqueeze(0))
+                                        densities.append(density)
+                                    except ValueError as e:
+                                        raise RuntimeError(
+                                            f"Failed to parse NNUE CSV logits: {e}. Output: {lines[0]}"
+                                        )
+                                else:
+                                    # Fallback for very old format: single value (treat as class-0 logit)
+                                    try:
                                         cpp_output = float(lines[0])
-                                        all_outputs.append(torch.tensor([cpp_output]))
-                                except (ValueError, IndexError) as e:
-                                    raise RuntimeError(
-                                        f"Failed to parse C++ NNUE output: {e}. Output: {lines[0] if lines else 'empty'}"
-                                    )
+                                        all_outputs.append(
+                                            torch.tensor(
+                                                [[cpp_output]], dtype=torch.float32
+                                            )
+                                        )
+                                    except ValueError as e:
+                                        raise RuntimeError(
+                                            f"Failed to parse legacy NNUE output: {e}. Output: {lines[0]}"
+                                        )
                             else:
                                 raise RuntimeError(
                                     "C++ NNUE engine returned empty output"
@@ -331,7 +336,7 @@ def evaluate_compiled_model(
                         if target.dim() == 0:
                             target = target.unsqueeze(0)
                         all_targets.append(target)
-                    sample_count += processed_samples
+                    # no-op
 
             # Add targets for the samples we processed (do this once per batch)
             # Note: This was causing duplicate target collection for NNUE models
@@ -339,16 +344,32 @@ def evaluate_compiled_model(
 
         if all_outputs and len(all_outputs) > 0:
             try:
-                # Ensure all tensors have the same shape before concatenating
-                if len(all_outputs) == 1:
-                    outputs = all_outputs[0]
-                else:
-                    outputs = torch.cat(all_outputs)
+                # Ensure consistent [N, C] shape before concatenating
+                outputs = (
+                    torch.cat(all_outputs, dim=0)
+                    if len(all_outputs) > 1
+                    else all_outputs[0]
+                )
 
-                if len(all_targets) == 1:
-                    targets = all_targets[0]
-                else:
-                    targets = torch.cat(all_targets)
+                targets = (
+                    torch.cat(all_targets, dim=0)
+                    if len(all_targets) > 1
+                    else all_targets[0]
+                )
+
+                # Guard: if multiclass labels but outputs are [N,1], warn/raise
+                inferred_num_classes = (
+                    int(targets.max().item()) + 1 if targets.numel() > 0 else 1
+                )
+                if (
+                    inferred_num_classes > 2
+                    and outputs.ndim == 2
+                    and outputs.shape[1] == 1
+                ):
+                    raise RuntimeError(
+                        f"Compiled NNUE produced shape {tuple(outputs.shape)} for {inferred_num_classes}-class labels."
+                        " This would compute misleading binary metrics. Ensure engine emits C logits."
+                    )
 
                 metrics = compute_metrics(outputs, targets)
 
@@ -362,17 +383,8 @@ def evaluate_compiled_model(
                     metrics["ms_per_sample"] = 0.0
 
                 # Calculate density metric (for NNUE models)
-                if (
-                    model_type == "nnue"
-                    and hasattr(evaluate_compiled_model, "densities")
-                    and evaluate_compiled_model.densities
-                ):
-                    avg_density = sum(evaluate_compiled_model.densities) / len(
-                        evaluate_compiled_model.densities
-                    )
-                    metrics["latent_density"] = avg_density
-                    # Clear the densities for next evaluation
-                    evaluate_compiled_model.densities = []
+                if model_type == "nnue" and densities:
+                    metrics["latent_density"] = sum(densities) / len(densities)
                 else:
                     metrics["latent_density"] = 0.0
 

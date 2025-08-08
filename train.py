@@ -5,9 +5,11 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -18,6 +20,7 @@ from data import create_data_loaders
 from evaluate import compute_metrics, evaluate_compiled_model, evaluate_model
 from nnue import NNUE, EtinyNet, GridFeatureSet
 from nnue_runpod_service import stop_runpod
+from serialize import serialize_etinynet_model, serialize_model
 from training_utils import (
     early_log,
     replay_early_logs_to_wandb,
@@ -121,6 +124,98 @@ def compile_cpp_engine(model_type: str) -> bool:
         raise  # Re-raise the original exception with full details
 
 
+def build_sanitizer_engine() -> None:
+    """Build a sanitizer-instrumented engine (ASan+UBSan) for smoke testing."""
+    early_log("🧪 Building sanitizer C++ engine (ASan+UBSan) for smoke test...")
+    engine_dir = Path("engine")
+    san_dir = engine_dir / "build_san"
+    san_dir.mkdir(exist_ok=True)
+    try:
+        cmake_cmd = [
+            "cmake",
+            "..",
+            "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -g -O1 -fno-omit-frame-pointer",
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined",
+        ]
+        res = subprocess.run(
+            cmake_cmd, cwd=san_dir, capture_output=True, text=True, timeout=60
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"Sanitizer cmake failed: {res.stderr}")
+        res = subprocess.run(
+            ["make", "-j4"], cwd=san_dir, capture_output=True, text=True, timeout=180
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"Sanitizer make failed: {res.stderr}")
+        early_log("✅ Sanitizer engine built")
+    except Exception as e:
+        early_log(f"❌ Failed to build sanitizer engine: {e}")
+        raise
+
+
+def smoke_test_sanitizer_engine(model_type: str) -> None:
+    """Run one inference through the sanitizer engine to catch memory issues early."""
+    early_log("🧪 Running sanitizer smoke test...")
+    san_exec = (
+        Path("engine/build_san/nnue_inference")
+        if model_type == "nnue"
+        else Path("engine/build_san/etinynet_inference")
+    )
+    if not san_exec.exists():
+        raise RuntimeError(f"Sanitizer executable not found: {san_exec}")
+
+    # Prepare a tiny random sample and a trivial model
+    if model_type == "nnue":
+        feature_set = GridFeatureSet(grid_size=8, num_features_per_square=4)
+        model = NNUE(
+            feature_set=feature_set,
+            l1_size=64,
+            l2_size=4,
+            l3_size=8,
+            num_classes=10,
+            input_size=32,
+            weight_decay=0.0,
+        )
+        model_path = Path(tempfile.mktemp(suffix=".nnue"))
+        serialize_model(model, model_path)
+        img = np.random.rand(32, 32, 3).astype(np.float32)
+        img_path = Path(tempfile.mktemp(suffix=".bin"))
+        img.tofile(str(img_path))
+    else:
+        model = EtinyNet(
+            variant="1.0", num_classes=10, input_size=112, weight_decay=0.0
+        )
+        model_path = Path(tempfile.mktemp(suffix=".etiny"))
+        serialize_etinynet_model(model, model_path)
+        img = np.random.rand(112, 112, 3).astype(np.float32)
+        img_path = Path(tempfile.mktemp(suffix=".bin"))
+        img.tofile(str(img_path))
+
+    try:
+        args = [
+            str(san_exec),
+            str(model_path),
+            str(img_path),
+            str(img.shape[0]),
+            str(img.shape[1]),
+        ]
+        res = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        if res.returncode != 0:
+            raise RuntimeError(
+                f"Sanitizer engine failed (rc={res.returncode})\nStdout: {res.stdout}\nStderr: {res.stderr}"
+            )
+        early_log("✅ Sanitizer smoke test passed")
+    finally:
+        try:
+            if model_path.exists():
+                model_path.unlink()
+            if img_path.exists():
+                img_path.unlink()
+        except Exception:
+            pass
+
+
 def test_cpp_engine_inference(model: torch.nn.Module, model_type: str) -> bool:
     """Test C++ engine inference with a small sample to verify it works."""
     early_log("🧪 Testing C++ engine inference...")
@@ -191,11 +286,14 @@ def train_model(
     checkpoint_manager = CheckpointManager(config.log_dir, wandb.run.name)
 
     train_loader, val_loader, test_loader = create_data_loaders(
+        dataset_name=getattr(config, "dataset_name", "cifar10"),
         batch_size=config.batch_size,
         num_workers=config.num_workers,
+        target_size=None,
+        max_samples_per_split=getattr(config, "max_samples_per_split", None),
+        subset=config.subset,
         use_augmentation=config.use_augmentation,
         augmentation_strength=config.augmentation_strength,
-        subset=config.subset,
     )
 
     if model_type == "nnue":
@@ -237,6 +335,10 @@ def train_model(
     try:
         compile_cpp_engine(model_type)
         early_log("✅ C++ engine ready for compiled evaluation")
+        # Optional sanitizer smoke test (enable with NNUE_SANITIZER_SMOKE=1)
+        if os.getenv("NNUE_SANITIZER_SMOKE", "0") == "1":
+            build_sanitizer_engine()
+            smoke_test_sanitizer_engine(model_type)
     except Exception as e:
         early_log("❌ C++ engine compilation failed! Training cannot start.")
         early_log("   This is a critical error - please fix compilation issues.")

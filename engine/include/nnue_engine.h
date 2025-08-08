@@ -372,6 +372,7 @@ struct LayerStack {
     AlignedVector<int8_t> output_weights;
     AlignedVector<int32_t> output_biases;
     float output_scale;
+    int out_classes;  // number of output classes (>=1)
     
     LayerStack();
     ~LayerStack() = default;
@@ -384,6 +385,7 @@ struct LayerStack {
     
     // Forward pass through all layers with layer stack index for bucket selection
     float forward(const int16_t* input, int layer_stack_index = 0) const;
+    std::vector<float> forward_multiclass(const int16_t* input, int layer_stack_index = 0) const;
     
     bool load_from_stream(std::ifstream& file);
 };
@@ -573,6 +575,7 @@ public:
     
     // Evaluate image: RGB float[H*W*3] -> score
     float evaluate(const float* image_data, int image_h = 96, int image_w = 96, int layer_stack_index = 0) const;
+    std::vector<float> evaluate_logits(const float* image_data, int image_h = 96, int image_w = 96, int layer_stack_index = 0) const;
     
     // Chess engine-style incremental evaluation
     float evaluate_incremental(const std::vector<int>& current_features, int layer_stack_index = 0) const;

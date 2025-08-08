@@ -2,7 +2,10 @@ import argparse
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import sys
+import webbrowser
 from typing import Optional
 
 import requests
@@ -64,8 +67,34 @@ def _check_git_status() -> None:
 
 
 def _open_browser(url: str) -> None:
-    # Removed browser auto-open for headless environments
-    print(f"Visit: {url}")
+    """Attempt to open the W&B run in Google Chrome with safe fallbacks.
+
+    - macOS: uses 'open -a "Google Chrome"'
+    - Linux: tries google-chrome/chromium; falls back to xdg-open
+    - Windows: uses default handler via webbrowser/os.startfile
+    """
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", "-a", "Google Chrome", url], check=False, timeout=5)
+        elif sys.platform.startswith("linux"):
+            chrome_bin = (
+                shutil.which("google-chrome")
+                or shutil.which("chrome")
+                or shutil.which("chromium")
+                or shutil.which("chromium-browser")
+            )
+            if chrome_bin:
+                subprocess.run([chrome_bin, url], check=False, timeout=5)
+            else:
+                subprocess.run(["xdg-open", url], check=False, timeout=5)
+        elif sys.platform.startswith("win"):
+            # webbrowser/open handles Windows appropriately
+            webbrowser.open(url, new=1, autoraise=True)
+        else:
+            webbrowser.open(url, new=1, autoraise=True)
+        print(f"Opening browser: {url}")
+    except Exception as exc:
+        print(f"Visit: {url} (auto-open failed: {exc})")
 
 
 def _create_docker_script(training_command: str) -> str:

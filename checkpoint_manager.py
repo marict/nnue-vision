@@ -61,8 +61,14 @@ class CheckpointManager:
             f"📤 Uploading BEST model to wandb (epoch {epoch}, F1: {metrics.get('val_f1', 0):.3f})..."
         )
 
-        wandb.save(tmp_path)
-        early_log(f"✅ Best model uploaded to wandb")
+        # Only attempt upload if wandb.run exists; otherwise skip upload (common in tests)
+        if getattr(wandb, "run", None) is not None:
+            wandb.save(tmp_path)
+            early_log("✅ Best model uploaded to wandb")
+        else:
+            early_log(
+                "⚠️ W&B not initialized (wandb.run is None); skipping upload during tests"
+            )
 
         os.unlink(tmp_path)
 

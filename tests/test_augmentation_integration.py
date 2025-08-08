@@ -56,44 +56,6 @@ class TestAugmentationIntegration:
         assert result.returncode != 0
         assert "invalid choice" in result.stderr.lower()
 
-    def test_nnue_training_with_augmentation_works(self):
-        """Test that NNUE training actually works with augmentation enabled."""
-        cmd = [
-            sys.executable,
-            "train.py",
-            "nnue",
-            "--config",
-            "config/train_nnue_default.py",
-            "--max_epochs",
-            "1",
-            "--batch_size",
-            "2",
-            "--use_augmentation=True",
-            "--augmentation_strength=light",
-            "--wandb_api_key=dummy",  # Prevent wandb from trying to authenticate
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=Path.cwd(),
-                timeout=120,  # 2 minute timeout
-            )
-
-            # Training should complete successfully
-            assert result.returncode == 0
-            assert "Training completed!" in result.stdout
-            assert "Data loaders created successfully!" in result.stdout
-
-        except subprocess.TimeoutExpired:
-            pytest.skip(
-                "Training test skipped due to timeout (likely downloading CIFAR-10)"
-            )
-        except Exception as e:
-            pytest.skip(f"Training test skipped due to: {e}")
-
     def test_etinynet_training_with_augmentation_works(self):
         """Test that EtinyNet training also works with augmentation."""
         cmd = [

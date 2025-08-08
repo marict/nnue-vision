@@ -446,19 +446,16 @@ def write_layer_stack(f, classifier_data: Dict[str, Any]) -> None:
     f.write(struct.pack("<I", l3_size))  # l2_bias_count
     f.write(l2_extended_bias.cpu().numpy().astype("<i4").tobytes())
 
-    # Write output layer: l3_size -> 1
+    # Write output layer: l3_size -> num_classes (full multiclass)
     l3_weight = l3_layer["weight"]
     l3_bias = l3_layer["bias"]
+    num_classes = l3_weight.shape[0]
 
-    # Take only the first output (since C++ expects single output)
-    output_weight = l3_weight[:1, :]  # 1 x l3_size
-    output_bias = l3_bias[:1]  # 1
-
-    f.write(struct.pack("<I", 1))  # out_out_size
+    f.write(struct.pack("<I", num_classes))  # out_out_size (number of classes)
     f.write(struct.pack("<I", l3_size))  # out_in_size
-    f.write(output_weight.cpu().numpy().astype("i1").tobytes())
-    f.write(struct.pack("<I", 1))  # out_bias_count
-    f.write(output_bias.cpu().numpy().astype("<i4").tobytes())
+    f.write(l3_weight.cpu().numpy().astype("i1").tobytes())
+    f.write(struct.pack("<I", num_classes))  # out_bias_count
+    f.write(l3_bias.cpu().numpy().astype("<i4").tobytes())
 
 
 def write_classifier(f, classifier_data: Dict[str, Any]) -> None:

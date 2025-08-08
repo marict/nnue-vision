@@ -25,9 +25,11 @@ import tempfile
 from pathlib import Path
 from typing import Tuple
 
+import numpy as np
 import torch
 
-from nnue import NNUE, EtinyNet, GridFeatureSet
+from data.loaders import create_data_loaders
+from nnue import NNUE, EtinyNet
 from serialize import serialize_etinynet_model, serialize_model
 
 # -------------------------------------------------------------
@@ -58,9 +60,18 @@ def ensure_engine_built(build_dir: Path) -> None:
         engine_src_dir = build_dir.parent.parent  # engine/build/build_bench -> engine
         run(["cmake", "-DCMAKE_BUILD_TYPE=Release", str(engine_src_dir)], cwd=build_dir)
 
-    # Build static library and NNUE benchmark executable
+    # Build static library and NNUE benchmark + inference executables
     run(
-        ["cmake", "--build", ".", "--target", "nnue_engine", "benchmark_engine"],
+        [
+            "cmake",
+            "--build",
+            ".",
+            "--target",
+            "nnue_engine",
+            "benchmark_engine",
+            "nnue_inference",
+            "etinynet_inference",
+        ],
         cwd=build_dir,
     )
 
@@ -107,14 +118,119 @@ def create_models(tmp_dir: Path) -> Tuple[Path, Path]:
     nnue_path = tmp_dir / "nnue_098m.nnue"
     serialize_model(nnue, nnue_path)
 
-    # EtinyNet – 0.98M parameter variant for fair comparison
-    etiny = EtinyNet(variant="0.98M", num_classes=1000, input_size=112, use_asq=False)
+    # EtinyNet – micro variant sized for CIFAR-10 and speed
+    etiny = EtinyNet(variant="micro", num_classes=10, input_size=32, use_asq=False)
     etiny.eval()
 
     etiny_path = tmp_dir / "etinynet_098m.etiny"
     serialize_etinynet_model(etiny, etiny_path)
 
     return nnue_path, etiny_path
+
+
+# -------------------------------------------------------------
+# CIFAR-10 driven runtime comparison (untrained models)
+# -------------------------------------------------------------
+
+
+def run_cifar10_exec_benchmark(
+    nnue_model_path: Path,
+    etiny_model_path: Path,
+    build_dir: Path,
+    num_samples: int = 200,
+) -> None:
+    """Measure ms/sample on CIFAR-10 for untrained NNUE vs EtinyNet using C++ inference executables."""
+    print("\n📦 CIFAR-10 Performance Benchmark (untrained models)")
+    print("=" * 55)
+
+    # Prepare CIFAR-10 loaders (no augmentation); batch_size=1 for per-sample timing
+    _, val_loader, _ = create_data_loaders(
+        dataset_name="cifar10",
+        batch_size=1,
+        target_size=(32, 32),
+        max_samples_per_split=num_samples,
+        subset=1.0,
+        use_augmentation=False,
+        augmentation_strength="light",
+    )
+
+    nnue_exec = build_dir / "nnue_inference"
+    etiny_exec = build_dir / "etinynet_inference"
+    if not nnue_exec.exists() or not etiny_exec.exists():
+        raise FileNotFoundError(
+            "Inference executables not found. Ensure engine build succeeded."
+        )
+
+    def time_model(exec_path: Path, model_path: Path) -> float:
+        total_time = 0.0
+        total = 0
+        for images, _ in val_loader:
+            # images: [1, C, H, W] tensor
+            img = images[0].cpu().numpy()  # CHW float32
+            h, w = img.shape[1], img.shape[2]
+            img_path = Path(tempfile.mktemp(suffix=".bin"))
+            try:
+                img.astype(np.float32).tofile(str(img_path))
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                # Use cuda events if available for more precise timing, else fallback to perf_counter
+                if torch.cuda.is_available():
+                    start.record()
+                    res = subprocess.run(
+                        [
+                            str(exec_path),
+                            str(model_path),
+                            str(img_path),
+                            str(h),
+                            str(w),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    )
+                    end.record()
+                    torch.cuda.synchronize()
+                    elapsed_ms = start.elapsed_time(end)
+                else:
+                    import time
+
+                    t0 = time.perf_counter()
+                    res = subprocess.run(
+                        [
+                            str(exec_path),
+                            str(model_path),
+                            str(img_path),
+                            str(h),
+                            str(w),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    )
+                    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+                if res.returncode != 0:
+                    raise RuntimeError(
+                        f"Inference failed (rc={res.returncode}): {res.stderr}"
+                    )
+                total_time += elapsed_ms
+                total += 1
+            finally:
+                try:
+                    if img_path.exists():
+                        img_path.unlink()
+                except Exception:
+                    pass
+        return (total_time / total) if total > 0 else float("inf")
+
+    nnue_ms = time_model(nnue_exec, nnue_model_path)
+    etiny_ms = time_model(etiny_exec, etiny_model_path)
+
+    print(f"Samples: {num_samples}")
+    print(f"NNUE    (32x32) avg: {nnue_ms:.3f} ms/sample")
+    print(f"EtinyNet(32x32) avg: {etiny_ms:.3f} ms/sample")
+    if etiny_ms > 0:
+        print(f"Speedup (Etiny/NNUE): {etiny_ms/nnue_ms:.2f}x")
 
 
 # -------------------------------------------------------------
@@ -283,7 +399,7 @@ def main() -> None:
     engine_dir = repo_root / "engine"
     build_dir = engine_dir / "build" / "build_bench"
 
-    print("🎯 NNUE vs EtinyNet: Fair 0.98M Parameter Comparison")
+    print("🎯 NNUE vs EtinyNet: CIFAR-10 runtime and density comparisons (untrained)")
     print("=" * 55)
 
     # Step 1: Build engine & benchmarks
@@ -324,7 +440,10 @@ def main() -> None:
 
         nnue_path, etiny_path = create_models(tmp_dir)
 
-        # Step 3: Run comprehensive density comparison
+        # Step 3a: CIFAR-10 performance on untrained models
+        run_cifar10_exec_benchmark(nnue_path, etiny_path, build_dir, num_samples=200)
+
+        # Step 3b: Optional density comparison using built-in benchmarks
         run_comprehensive_benchmark(
             nnue_path, etiny_path, nnue_benchmark, etiny_benchmark
         )

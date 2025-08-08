@@ -165,6 +165,31 @@ def device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def pytest_addoption(parser):
+    """Add options and conditionally enable pytest-xdist auto-parallelization."""
+    # If xdist is available and user didn't specify -n, set default -n auto
+    try:
+        import xdist  # noqa: F401
+
+        # Only add defaults when not supplied by user
+        if not any(
+            opt.startswith("-n") for opt in parser._getparser()._anonymous.options
+        ):
+            parser.addoption("-n", action="store", default="auto")
+            parser.addoption("--dist", action="store", default="loadscope")
+    except Exception:
+        pass
+
+
+def pytest_sessionstart(session):
+    """Constrain PyTorch thread usage to reduce contention under xdist."""
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def grid_feature_set():
     """Return a standard GridFeatureSet for testing."""
