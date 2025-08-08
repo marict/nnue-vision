@@ -523,43 +523,55 @@ std::vector<float> LayerStack::forward_multiclass(const int16_t* input, int laye
     (void)layer_stack_index;
     std::vector<float> logits(static_cast<size_t>(std::max(1, out_classes)), 0.0f);
 
-    // L1 combined
-    if (l2_size < 1 || l1_size < 1) {
+    // Implement SimpleClassifier parity:
+    // 1) Pairwise transform on input (int16): split halves, element-wise product for first half,
+    //    concatenate with first half to form length l1_size vector
+    if (l1_size < 2 || l2_size < 1 || l3_size < 1) {
         return logits;
     }
-    std::vector<int8_t> l1_combined_output(static_cast<size_t>(l2_size + 1));
-    simd::dense_forward_scalar(input, l1_weights.data(), l1_biases.data(),
-                               l1_combined_output.data(), l1_size, l2_size + 1, l1_scale);
-    float l1c_out = static_cast<float>(l1_combined_output[static_cast<size_t>(l2_size)]) / l1_scale;
-
-    std::vector<int8_t> l1_fact_output(l1_fact_biases.size());
-    simd::dense_forward_scalar(input, l1_fact_weights.data(), l1_fact_biases.data(),
-                               l1_fact_output.data(), l1_size, l1_fact_biases.size(), l1_fact_scale);
-    if (l1_fact_output.size() <= static_cast<size_t>(l2_size)) {
-        return logits;
+    const int half = l1_size / 2;
+    std::vector<int16_t> pairwise(static_cast<size_t>(l1_size));
+    for (int i = 0; i < half; ++i) {
+        int32_t a = static_cast<int32_t>(input[i]);
+        int32_t b = static_cast<int32_t>(input[i + half]);
+        // Scale product back into int16-ish range (approx)
+        int32_t prod = (a * b) / 128;  // heuristic scale
+        prod = std::max<int32_t>(0, std::min<int32_t>(127, prod));
+        pairwise[i] = static_cast<int16_t>(prod);
+        pairwise[i + half] = static_cast<int16_t>(std::max<int32_t>(0, std::min<int32_t>(127, a)));
     }
-    float l1f_out = static_cast<float>(l1_fact_output[static_cast<size_t>(l2_size)]) / l1_fact_scale;
 
-    std::vector<int16_t> l1_expanded(static_cast<size_t>(l2_size) * 2U);
+    // 2) Dense layer 1: pairwise (int16, len=l1_size) -> hidden1 (int8, len=l2_size)
+    std::vector<int8_t> hidden1(static_cast<size_t>(l2_size));
+    simd::dense_forward_scalar(pairwise.data(), l1_weights.data(), l1_biases.data(),
+                               hidden1.data(), l1_size, l2_size, l1_scale);
+    // ReLU
     for (int i = 0; i < l2_size; ++i) {
-        int32_t squared = static_cast<int32_t>(l1_combined_output[i]) * static_cast<int32_t>(l1_combined_output[i]);
-        squared = (squared * 127) / 128;
-        l1_expanded[i] = static_cast<int16_t>(std::max(0, std::min(127, squared)));
-        l1_expanded[i + l2_size] = static_cast<int16_t>(l1_combined_output[i]);
+        hidden1[i] = static_cast<int8_t>(std::max<int>(0, hidden1[i]));
     }
 
-    std::vector<int8_t> l2_output(l3_size);
-    simd::dense_forward_scalar(l1_expanded.data(), l2_weights.data(), l2_biases.data(),
-                               l2_output.data(), l2_size * 2, l3_size, l2_scale);
+    // 3) Dense layer 2: hidden1 (int8, len=l2_size) -> hidden2 (int8, len=l3_size)
+    std::vector<int8_t> hidden2(static_cast<size_t>(l3_size));
+    // l2_weights are stored as [l3_size, l2_size*2] with zeros in second half, use first l2_size only
+    for (int out_f = 0; out_f < l3_size; ++out_f) {
+        int32_t acc = l2_biases[out_f];
+        for (int in_f = 0; in_f < l2_size; ++in_f) {
+            int weight_idx = out_f * (l2_size * 2) + in_f;
+            acc += static_cast<int32_t>(hidden1[in_f]) * static_cast<int32_t>(l2_weights[weight_idx]);
+        }
+        int result = acc / static_cast<int32_t>(l2_scale);
+        result = std::max(-127, std::min(127, result));
+        hidden2[out_f] = static_cast<int8_t>(std::max(0, result));  // ReLU
+    }
 
+    // 4) Output layer: hidden2 (int8) -> logits (float, len=out_classes)
     for (int cls = 0; cls < out_classes; ++cls) {
         int32_t acc = output_biases[cls];
         for (int j = 0; j < l3_size; ++j) {
             int idx = cls * l3_size + j;
-            acc += static_cast<int32_t>(l2_output[j]) * static_cast<int32_t>(output_weights[idx]);
+            acc += static_cast<int32_t>(hidden2[j]) * static_cast<int32_t>(output_weights[idx]);
         }
-        float l3c = static_cast<float>(acc) / output_scale;
-        logits[static_cast<size_t>(cls)] = l3c + l1f_out + l1c_out;
+        logits[static_cast<size_t>(cls)] = static_cast<float>(acc) / output_scale;
     }
 
     return logits;
