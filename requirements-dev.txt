@@ -12,6 +12,7 @@ albumentations
 opencv-python-headless
 scikit-learn>=1.0.0
 torchvision
+tensorflow
 
 # RunPod cloud training dependencies
 runpod
