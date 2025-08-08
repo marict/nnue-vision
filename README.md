@@ -32,20 +32,31 @@ python train.py nnue --config config/train_nnue_default.py --max_epochs 50 --bat
 
 ### Cloud Training (RunPod)
 
-```bash
-# Install dependencies (includes RunPod support)
-pip install -r requirements-dev.txt
+Use the shared launcher at `~/ai2/runpod_service/runpod_service.py`.
 
+```bash
 # Set environment variables
 export WANDB_API_KEY=your_wandb_key
 export RUNPOD_API_KEY=your_runpod_key
 
-# Start NNUE cloud training
-python runpod_service.py train --script train.py --config config/train_nnue_default.py --model nnue
+# NNUE on RunPod (engine build handled by train.py)
+python /Users/paul_curry/ai2/runpod_service/runpod_service.py \
+  /Users/paul_curry/ai2/nnue-vision/train.py \
+  nnue --config config/train_nnue.py \
+  --note "nnue-compile" \
+  --pod-name nnue-compile
 
-# Start EtinyNet cloud training
-python runpod_service.py train --script train.py --config config/train_etinynet_default.py --model etinynet
+# EtinyNet on RunPod
+python /Users/paul_curry/ai2/runpod_service/runpod_service.py \
+  /Users/paul_curry/ai2/nnue-vision/train.py \
+  etinynet --config config/train_etinynet.py \
+  --note "etinynet-train" \
+  --pod-name etinynet-train
 ```
+
+Notes:
+- `train.py` compiles the C++ engine automatically (see `compile_cpp_engine()` in `train.py`).
+- Ensure this repo is clean and contains `requirements_dev.txt` at the repo root before launching.
 
 ## Model Architectures
 

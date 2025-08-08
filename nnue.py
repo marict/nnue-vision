@@ -555,6 +555,10 @@ class NNUE(nn.Module):
             "num_classes": self.num_classes,
             "nnue2score": self.nnue2score.item(),
             "quantized_one": 127.0,
+            # Serialize the current learnable visual threshold (mean across channels)
+            "visual_threshold": float(
+                self.visual_threshold.detach().mean().cpu().item()
+            ),
         }
 
         quantized_data = {"metadata": metadata}

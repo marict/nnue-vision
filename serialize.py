@@ -20,6 +20,13 @@ import torch
 from nnue import NNUE, EtinyNet, GridFeatureSet
 
 
+def _require_keys(d: Dict[str, Any], required: Dict[str, str], context: str) -> None:
+    missing = [k for k in required.keys() if k not in d]
+    if missing:
+        keys = ", ".join(missing)
+        raise ValueError(f"Missing required {context} keys: {keys}")
+
+
 def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     """Write the NNUE file header with model metadata."""
     # Magic number for NNUE files (4 bytes)
@@ -28,7 +35,20 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     # Version (4 bytes) - increment to 2 for conv layer support
     f.write(struct.pack("<I", 2))
 
-    # Architecture metadata
+    # Validate and write architecture metadata
+    _require_keys(
+        metadata,
+        {
+            "feature_set": "GridFeatureSet",
+            "L1": "int",
+            "L2": "int",
+            "L3": "int",
+            "nnue2score": "float",
+            "quantized_one": "float",
+            "visual_threshold": "float",
+        },
+        context="NNUE metadata",
+    )
     feature_set = metadata["feature_set"]
     f.write(struct.pack("<I", feature_set.num_features))  # Input features
     f.write(struct.pack("<I", metadata["L1"]))  # L1 size
@@ -39,7 +59,8 @@ def write_nnue_header(f, metadata: Dict[str, Any]) -> None:
     # Quantization parameters
     f.write(struct.pack("<f", metadata["nnue2score"]))
     f.write(struct.pack("<f", metadata["quantized_one"]))
-    f.write(struct.pack("<f", 0.1))  # visual_threshold (default value)
+    # Persist the current visual threshold (strict)
+    f.write(struct.pack("<f", float(metadata["visual_threshold"])))
 
 
 def write_etinynet_header(f, metadata: Dict[str, Any]) -> None:
@@ -50,7 +71,19 @@ def write_etinynet_header(f, metadata: Dict[str, Any]) -> None:
     # Version (4 bytes)
     f.write(struct.pack("<I", 1))
 
-    # Architecture metadata
+    # Validate and write architecture metadata
+    _require_keys(
+        metadata,
+        {
+            "variant": "str",
+            "num_classes": "int",
+            "input_size": "int",
+            "conv_channels": "int",
+            "final_channels": "int",
+            "use_asq": "bool",
+        },
+        context="EtinyNet metadata",
+    )
     variant_str = metadata["variant"].encode("utf-8")
     f.write(struct.pack("<I", len(variant_str)))
     f.write(variant_str)  # Variant string ("1.0" or "0.75")
