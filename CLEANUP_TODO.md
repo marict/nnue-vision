@@ -43,7 +43,7 @@ Cross-file goal: remove legacy shims, dead code, overly verbose comments, and re
 - [x] `container_setup.sh`
   - [x] Removed nonessential tools (`tree`, `htop`) to keep footprint lean
 
-- [x] `requirements-dev.txt`
+- [x] `requirements_dev.txt`
   - [x] Remove dev deps no longer used after cleanup
 
 - [x] Repo-wide

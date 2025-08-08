@@ -18,7 +18,7 @@ This project implements NNUE (Neural Network Efficiently Updatable) architecture
 
 ```bash
 # Install dependencies
-pip install -r requirements-dev.txt
+pip install -r requirements_dev.txt
 
 # Train NNUE model on CIFAR-10
 python train.py nnue --config config/train_nnue_default.py
